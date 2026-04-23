@@ -62,4 +62,4 @@
 ## 🎨 Design Philosophy
 The app prioritizes **visual excellence** and **perceived performance**. We use a "One-Shot Animation" model where elements fade into view once and remain stable, eliminating the jitter common in mobile navigation apps.
 
-Developed with ❤️ for the Campus Community.
+Developed by sahil❤️ for the Campus Community.
