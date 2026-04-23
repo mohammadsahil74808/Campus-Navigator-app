@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -7,7 +8,9 @@ import 'campus_ui.dart';
 import 'splash_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'event_screen.dart';
+import 'campus_data.dart';
 
 
 void main() async {
@@ -100,8 +103,10 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: "Campus Navigator",
       theme: ThemeData.dark().copyWith(
-        colorScheme: const ColorScheme.dark(
-          primary: Colors.deepPurpleAccent,
+        textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurpleAccent,
+          brightness: Brightness.dark,
         ),
         scaffoldBackgroundColor: const Color(0xFF0F2027),
       ),
@@ -128,8 +133,16 @@ class _CampusMapScreenState extends State<CampusMapScreen> {
     child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.black.withAlpha(160),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.white.withAlpha(30), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(80),
+            blurRadius: 10,
+            offset: const Offset(2, 2),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -175,116 +188,8 @@ class _CampusMapScreenState extends State<CampusMapScreen> {
 
   static const LatLng _campusCenter = LatLng(28.409845, 77.403381);
 
-  // ---------- Updated Structure (Blocks + Rooms) ----------
-  final List<Map<String, dynamic>> _blocks = [
-    {
-      "name": "Computing Block",
-      "lat": 28.409845,
-      "lng": 77.403381,
-      "markerColor": BitmapDescriptor.hueRed,
-      "rooms": [
-        {
-          "name": "CS101",
-          "floor": 1,
-          "directions": "Ground floor, right wing near main lab."
-        },
-        {
-          "name": "CS201",
-          "floor": 2,
-          "directions":
-              "Go to 2nd floor using left stairs, 3rd room on the right."
-        },
-        {
-      "name": "IBM Lab",
-      "floor": 2,
-      "directions":
-          "Go to 2nd floor, take a right, then right again, and once more right. The IBM Lab (Room 2205) is located just beside the Departmental Library."
-    },
-
-    {
-      "name": "2205",
-      "floor": 2,
-      "directions":
-          "Go to 2nd floor, take a right, then right again, and once more right. The IBM Lab (Room 2205) is located just beside the Departmental Library."
-    },
-      ]
-    },
-    {
-      "name": "Canteen",
-      "lat": 28.409884,
-      "lng": 77.404012,
-      "markerColor": BitmapDescriptor.hueGreen,
-      "rooms": []
-    },
-        {
-      "name": "Gym & NSS",
-      "lat": 28.409882,
-      "lng": 77.403647,
-      "markerColor": BitmapDescriptor.hueOrange,
-      "rooms": []
-    },
-        {
-      "name": "lawn Tennis court",
-      "lat": 28.409382,
-      "lng": 77.404283,
-      "markerColor": BitmapDescriptor.hueBlue,
-      "rooms": []
-    },
-
-        {
-      "name": "School of Architecture",
-      "lat": 28.409860,
-      "lng": 77.404119,
-      "markerColor": BitmapDescriptor.hueAzure,
-      "rooms": []
-    },
-
-        {
-      "name": "Mess",
-      "lat": 28.409950,
-      "lng": 77.402982,
-      "markerColor": BitmapDescriptor.hueYellow,
-      "rooms": []
-    },
-        {
-      "name": "Parking",
-      "lat": 28.409643,
-      "lng": 77.402250,
-      "markerColor": BitmapDescriptor.hueCyan,
-      "rooms": []
-    },
-    {
-      "name": "Girls Hostel",
-      "lat": 28.410125,
-      "lng": 77.402669,
-      "markerColor": BitmapDescriptor.hueRose,
-      "rooms": []
-    },
-    
-    {
-      "name": "Komati Block",
-      "lat": 28.408725,
-      "lng": 77.403140,
-      "markerColor": BitmapDescriptor.hueMagenta,
-      "rooms": []
-    },
-
-    {
-      "name": "Music and Dance",
-      "lat": 28.408769,
-      "lng": 77.402810,
-      "markerColor": 30.0,
-      "rooms": []
-    },
-
-    {
-      "name": "Central Block",
-      "lat": 28.409265,
-      "lng": 77.403197,
-      "markerColor": BitmapDescriptor.hueViolet,
-      "rooms": []
-    },
-  ];
+  // ---------- Synchronized Data Source ----------
+  final List<Map<String, dynamic>> _blocks = allCampusBlocks;
 
   final Set<Marker> _markers = {};
   LatLng? _currentLocation;
@@ -310,79 +215,17 @@ class _CampusMapScreenState extends State<CampusMapScreen> {
     }
   }
 
-  // ---------- Show Block Info (Updated & Improved) ----------
+  // ---------- Show Block Info ----------
 void _showBlockInfo(Map<String, dynamic> block) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (_) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Text(
-              block['name'],
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.deepPurple,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "Latitude: ${block['lat'].toStringAsFixed(6)}   |   Longitude: ${block['lng'].toStringAsFixed(6)}",
-              style: const TextStyle(fontSize: 14, color: Color.fromARGB(255, 255, 255, 255)),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-
-            // Instruction Text
-            Text(
-              "After reaching the block, return to this app for room-level directions.",
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: const Color.fromARGB(255, 255, 255, 255)),
-            ),
-            const SizedBox(height: 10),
-
-            // Full-width Navigate Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurple,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                icon: const Icon(Icons.navigation, color: Colors.white),
-                label: const Text(
-                  "Navigate in Google Maps",
-                  style: TextStyle(color: Colors.white, fontSize: 16),
-                ),
-                onPressed: () async {
-                  Navigator.pop(context);
-                  await _openInGoogleMaps(block['lat'], block['lng']);
-                },
-              ),
-            ),
-
-            const SizedBox(height: 15),
-          ],
-        ),
-      );
-    },
+    backgroundColor: Colors.transparent,
+    builder: (_) => _BlockInfoSheet(block: block, onNavigate: (lat, lng) => _openInGoogleMaps(lat, lng)),
   );
 }
 
-
-  // ---------- Search Room or Block ----------
+  // ---------- Search Room or Block (FLEXIBLE) ----------
   Future<void> _searchLocation(String query) async {
     query = query.trim().toLowerCase();
 
@@ -397,9 +240,9 @@ void _showBlockInfo(Map<String, dynamic> block) {
       }
     }
 
-    // 2. Otherwise, search block name
+    // 2. Otherwise, search block name (Flexible contains)
     final blockResult = _blocks.firstWhere(
-      (b) => b['name'].toString().toLowerCase() == query,
+      (b) => b['name'].toString().toLowerCase().contains(query),
       orElse: () => {},
     );
 
@@ -417,117 +260,7 @@ void _showBlockInfo(Map<String, dynamic> block) {
   showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-    ),
-    builder: (_) {
-      return Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF2C5364), Color(0xFF203A43), Color(0xFF0F2027)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.5),
-              blurRadius: 15,
-              offset: const Offset(0, -3),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                height: 5,
-                width: 50,
-                margin: const EdgeInsets.only(bottom: 18),
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-            Row(
-              children: [
-                const Icon(Icons.meeting_room, color: Colors.deepPurpleAccent, size: 30),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "${room['name']} (${block['name']})",
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      shadows: [
-                        Shadow(
-                          blurRadius: 8,
-                          color: Colors.deepPurpleAccent,
-                          offset: Offset(0, 0),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                const Icon(Icons.layers, color: Colors.blueAccent, size: 22),
-                const SizedBox(width: 8),
-                Text(
-                  "Floor: ${room['floor']}",
-                  style: const TextStyle(color: Colors.white70, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.directions, color: Colors.orangeAccent, size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    room['directions'],
-                    style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.4),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 25),
-            Center(
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.navigation, color: Colors.white),
-                label: const Text(
-                  "Navigate to Block",
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: Colors.white),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurpleAccent.withOpacity(0.8),
-                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 8,
-                ),
-                onPressed: () async {
-                  Navigator.pop(context);
-                  await _openInGoogleMaps(block['lat'], block['lng']);
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-        ),
-      );
-    },
+    builder: (_) => _RoomInfoSheet(block: block, room: room, onNavigate: (lat, lng) => _openInGoogleMaps(lat, lng)),
   );
 }
 
@@ -593,8 +326,8 @@ void _showBlockInfo(Map<String, dynamic> block) {
           ),
           // 🔥 LEGEND ALWAYS ON TOP
     Positioned(
-      top: 90,
-      right: 12,
+      top: 105, // Increased from 90 to avoid search bar attachment
+      right: 15,
       child: _colorLegend(),
     ),
           SafeArea(
@@ -666,7 +399,7 @@ class _HomeScreenState extends State<HomeScreen>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
-    )..repeat(reverse: true);
+    )..forward(); // Only move blobs once
   }
 
   @override
@@ -680,23 +413,58 @@ class _HomeScreenState extends State<HomeScreen>
     return Scaffold(
       body: Stack(
         children: [
-          // BACKGROUND ANIMATED WAVES
-          AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Color.lerp(Colors.deepPurple, Colors.blue, _controller.value)!,
-                      Color.lerp(Colors.indigo, Colors.black, _controller.value)!,
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-              );
-            },
+          // 1. DYNAMIC MESH BACKGROUND (Lag-Free)
+          RepaintBoundary(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Stack(
+                  children: [
+                    // Base Dark Layer
+                    Container(color: const Color(0xFF0F2027)),
+
+                    // Moving Blob 1
+                    Positioned(
+                      top: -100 + (50 * _controller.value),
+                      left: -50 + (30 * _controller.value),
+                      child: _MeshBlob(
+                        size: 400,
+                        color: Colors.deepPurpleAccent.withOpacity(0.3),
+                      ),
+                    ),
+
+                    // Moving Blob 2
+                    Positioned(
+                      bottom: -80 + (40 * (1 - _controller.value)),
+                      right: -60 + (50 * _controller.value),
+                      child: _MeshBlob(
+                        size: 350,
+                        color: Colors.blueAccent.withOpacity(0.2),
+                      ),
+                    ),
+
+                    // Moving Blob 3 (Center subtle)
+                    Positioned(
+                      top: 200 + (30 * _controller.value),
+                      right: 100 - (20 * _controller.value),
+                      child: _MeshBlob(
+                        size: 300,
+                        color: Colors.indigoAccent.withOpacity(0.15),
+                      ),
+                    ),
+
+                    // Tech Grid Overlay
+                    Opacity(
+                      opacity: 0.12,
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: _GridPainter(),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
 
           // MAIN UI
@@ -705,35 +473,51 @@ class _HomeScreenState extends State<HomeScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.location_on_rounded,
-                    color: Colors.purple.shade300,
-                    size: 90,
+                  // NEON GLOW ICON
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.purpleAccent.withOpacity(0.2),
+                          blurRadius: 40,
+                          spreadRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.location_on_rounded,
+                      color: Colors.purple.shade300,
+                      size: 90,
+                    ).animate()
+                     .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1), duration: 800.ms, curve: Curves.easeOutBack),
                   ),
                   const SizedBox(height: 25),
 
                   Text(
                     "Campus Navigator",
-                    style: GoogleFonts.poppins(
-                      fontSize: 34,
-                      fontWeight: FontWeight.w600,
+                    style: GoogleFonts.outfit(
+                      fontSize: 38,
+                      fontWeight: FontWeight.bold,
                       color: Colors.white,
                       shadows: [
                         Shadow(
-                          blurRadius: 20,
-                          color: Colors.deepPurpleAccent,
+                          blurRadius: 25,
+                          color: Colors.deepPurpleAccent.withOpacity(0.8),
                         )
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
 
                   Text(
                     "Navigate your campus effortlessly",
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
+                    style: GoogleFonts.outfit(
+                      fontSize: 17,
                       color: Colors.white70,
+                      letterSpacing: 0.5,
                     ),
                   ),
 
@@ -797,26 +581,311 @@ _menuButton(
   }) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: 260,
-        padding: const EdgeInsets.symmetric(vertical: 15),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white30, width: 1),
-          color: Colors.white.withOpacity(0.12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            width: 280,
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border:
+                  Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+              gradient: LinearGradient(
+                colors: [
+                  Colors.white.withOpacity(0.15),
+                  Colors.white.withOpacity(0.05)
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 8),
+                )
+              ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, color: Colors.white, size: 24),
+                const SizedBox(width: 12),
+                Text(
+                  label,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+      ).animate().fadeIn(duration: 600.ms),
+    );
+  }
+}
+
+// --------------------- PERFORMANCE OPTIMIZED HUD HELPERS ---------------------
+
+class _MeshBlob extends StatelessWidget {
+  final double size;
+  final Color color;
+
+  const _MeshBlob({required this.size, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: color,
+            blurRadius: 100,
+            spreadRadius: 20,
+          )
+        ],
+      ),
+    );
+  }
+}
+
+class _GridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.5)
+      ..strokeWidth = 0.5;
+
+    const double step = 30.0;
+
+    for (double i = 0; i < size.width; i += step) {
+      canvas.drawLine(Offset(i, 0), Offset(i, size.height), paint);
+    }
+    for (double i = 0; i < size.height; i += step) {
+      canvas.drawLine(Offset(0, i), Offset(size.width, i), paint);
+    }
+
+    // Add dots at intersections
+    final dotPaint = Paint()..color = Colors.white.withOpacity(0.8);
+    for (double i = 0; i < size.width; i += step) {
+      for (double j = 0; j < size.height; j += step) {
+        canvas.drawCircle(Offset(i, j), 1.0, dotPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _BlockInfoSheet extends StatefulWidget {
+  final Map<String, dynamic> block;
+  final Function(double, double) onNavigate;
+  const _BlockInfoSheet({required this.block, required this.onNavigate});
+
+  @override
+  State<_BlockInfoSheet> createState() => _BlockInfoSheetState();
+}
+
+class _BlockInfoSheetState extends State<_BlockInfoSheet> {
+  @override
+  Widget build(BuildContext context) {
+    return BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F2027).withOpacity(0.7),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+          border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.deepPurpleAccent.withOpacity(0.3),
+              blurRadius: 20,
+              offset: const Offset(0, -5),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: Colors.white, size: 22),
-            const SizedBox(width: 10),
+            Container(
+              height: 4, width: 40,
+              decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+            ),
+            const SizedBox(height: 20),
             Text(
-              label,
-              style: GoogleFonts.poppins(
-                color: Colors.white,
-                fontSize: 17,
+              widget.block['name'],
+              style: GoogleFonts.outfit(
+                fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
+                shadows: [Shadow(color: Colors.deepPurpleAccent.withOpacity(0.8), blurRadius: 10)],
+              ),
+              textAlign: TextAlign.center,
+            ).animate().fade(duration: 400.ms),
+            const SizedBox(height: 10),
+            Text(
+              "LAT: ${widget.block['lat'].toStringAsFixed(6)} | LNG: ${widget.block['lng'].toStringAsFixed(6)}",
+              style: GoogleFonts.outfit(fontSize: 13, color: Colors.white60, letterSpacing: 1),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 25),
+            Text(
+              "Navigate to this building for room-level guidance.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.outfit(fontSize: 14, color: Colors.white),
+            ).animate().fade(delay: 200.ms),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurpleAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  elevation: 5,
+                ),
+                icon: const Icon(Icons.navigation),
+                label: Text("Navigate in Google Maps", style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+                onPressed: () async {
+                  Navigator.pop(context);
+                  widget.onNavigate(widget.block['lat'], widget.block['lng']);
+                },
               ),
             ),
+            const SizedBox(height: 15),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomInfoSheet extends StatefulWidget {
+  final Map<String, dynamic> block;
+  final Map<String, dynamic> room;
+  final Function(double, double) onNavigate;
+
+  const _RoomInfoSheet({required this.block, required this.room, required this.onNavigate});
+
+  @override
+  State<_RoomInfoSheet> createState() => _RoomInfoSheetState();
+}
+
+class _RoomInfoSheetState extends State<_RoomInfoSheet> {
+  @override
+  Widget build(BuildContext context) {
+    return BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F2027).withOpacity(0.7),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+          border: Border.all(color: Colors.blueAccent.withOpacity(0.3), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.blueAccent.withOpacity(0.1),
+              blurRadius: 20,
+              offset: const Offset(0, -5),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                height: 4, width: 40,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            Row(
+              children: [
+                const Icon(Icons.hub_outlined, color: Colors.blueAccent, size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    "${widget.room['name']}",
+                    style: GoogleFonts.outfit(
+                      fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
+                      shadows: [Shadow(color: Colors.blueAccent.withOpacity(0.5), blurRadius: 10)],
+                    ),
+                  ),
+                ),
+              ],
+            ).animate().fade(),
+            const SizedBox(height: 5),
+            Padding(
+              padding: const EdgeInsets.only(left: 40),
+              child: Text(
+                "Located in ${widget.block['name']}",
+                style: GoogleFonts.outfit(fontSize: 14, color: Colors.white60),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.layers_outlined, color: Colors.blueAccent, size: 20),
+                  const SizedBox(width: 10),
+                  Text(widget.room['floor'] == 0 ? "GROUND FLOOR" : "FLOOR ${widget.room['floor']}", style: GoogleFonts.outfit(color: Colors.white70, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                ],
+              ),
+            ).animate().fade(delay: 200.ms),
+            const SizedBox(height: 15),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.near_me_outlined, color: Colors.orangeAccent, size: 20),
+                    const SizedBox(width: 10),
+                    Text("DIRECTIONS", style: GoogleFonts.outfit(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 12, letterSpacing: 1)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.room['directions'],
+                  style: GoogleFonts.outfit(color: Colors.white.withOpacity(0.85), fontSize: 15, height: 1.5),
+                ),
+              ],
+            ).animate().fade(delay: 400.ms),
+            const SizedBox(height: 25),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.navigation),
+                label: Text("Navigate to Block", style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(context);
+                  widget.onNavigate(widget.block['lat'], widget.block['lng']);
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
           ],
         ),
       ),

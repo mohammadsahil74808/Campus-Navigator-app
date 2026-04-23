@@ -1,0 +1,44 @@
+﻿Analyzing campus_navigator...                                   
+
+   info - Don't use 'BuildContext's across async gaps - lib\add_event_screen.dart:72:19 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\admin_login_screen.dart:24:9 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\admin_login_screen.dart:30:28 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1480:44 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1485:28 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1486:28 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1493:46 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1576:44 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1581:34 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1582:34 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\campus_ui.dart:1589:46 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\event_screen.dart:25:38 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\event_screen.dart:66:43 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\event_screen.dart:128:57 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\event_screen.dart:130:64 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:131:29 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:435:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:513:60 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\main.dart:539:28 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:609:38 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\main.dart:806:31 - deprecated_member_use
+
+flutter : 21 issues 
+found. (ran in 3.2s)
+At line:1 char:1
++ flutter analyze > 
+analysis_output.txt 
+2>&1
++ ~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (21 i   
+ ssues found. (r    
+an in 3.2s):Str    
+ing) [], Remote    
+Exception
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
