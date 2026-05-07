@@ -20,7 +20,6 @@
 - Precise directions for **Computing**, **Architecture**, **Pharmacy**, and **Central Blocks**.
 - **Intuitive Terminology:** "Ground Floor" support for easier level identification.
 - **Plain UI List:** A lightning-fast, static room list for quick lookup without distracting animations.
-- **Lite AR Navigation:** Live camera-based indoor guidance with 3D-perspective path lines and directional HUD (No extra downloads required).
 
 ### 📅 Live Events Gallery
 - **Floating Glass Cards:** Beautifully designed event cards that fade into view.
@@ -63,4 +62,8 @@
 ## 🎨 Design Philosophy
 The app prioritizes **visual excellence** and **perceived performance**. We use a "One-Shot Animation" model where elements fade into view once and remain stable, eliminating the jitter common in mobile navigation apps.
 
+<<<<<<< HEAD
 Developed by sahil ❤️ for the Campus Community.
+=======
+Developed by sahil❤️ for the Campus Community.
+>>>>>>> c365a13511504bae3050d8454c1ee954115c048f
