@@ -3,6 +3,10 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:vector_math/vector_math_64.dart' show Vector3;
+import 'navigation/navigation_model.dart';
+import 'navigation/ar_navigation_view.dart';
+import 'navigation/computing_block_graph.dart';
 
 void main() {
   runApp(const MyApp());
@@ -312,20 +316,53 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                 style: const TextStyle(fontSize: 16, color: Colors.white, height: 1.4),
               ),
               const SizedBox(height: 25),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: const Text("Got it"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.view_in_ar_rounded),
+                    label: const Text("AR Navigation"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.purpleAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      // Import NavigationNode and ARNavigationView
+                      // Use a placeholder node if graph not fully mapped
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ARNavigationView(
+                            targetNode: NavigationNode(
+                              id: room['name'],
+                              name: room['name'],
+                              floor: room['floor'],
+                              position: Vector3(10, 0, 10), // Default position
+                              type: NavNodeType.room,
+                            ),
+                            graph: computingBlockGraph,
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  onPressed: () => Navigator.pop(context),
-                ),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text("Got it"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               ),
             ],
           ),
