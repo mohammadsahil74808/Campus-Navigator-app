@@ -20,6 +20,7 @@
 - Precise directions for **Computing**, **Architecture**, **Pharmacy**, and **Central Blocks**.
 - **Intuitive Terminology:** "Ground Floor" support for easier level identification.
 - **Plain UI List:** A lightning-fast, static room list for quick lookup without distracting animations.
+- **Lite AR Navigation:** Live camera-based indoor guidance with 3D-perspective path lines and directional HUD (No extra downloads required).
 
 ### 📅 Live Events Gallery
 - **Floating Glass Cards:** Beautifully designed event cards that fade into view.
