@@ -1,68 +1,124 @@
 import 'dart:math';
-import 'navigation_model.dart';
+import 'dart:collection';
+import 'package:campus_prototype/navigation/navigation_model.dart';
+
+// ─── Priority Queue Entry ─────────────────────────────────────────────────────
+
+class _PQEntry implements Comparable<_PQEntry> {
+  final String nodeId;
+  final double priority;
+  _PQEntry(this.nodeId, this.priority);
+
+  @override
+  int compareTo(_PQEntry other) => priority.compareTo(other.priority);
+}
+
+// ─── PathFinder (A* with binary heap priority queue) ─────────────────────────
 
 class PathFinder {
   final CampusGraph graph;
 
   PathFinder(this.graph);
 
+  /// Returns a list of NavigationNodes from startId to endId.
+  /// Returns empty list if no path exists.
+  /// Multi-floor routing works via staircase/lift nodes that connect floors.
   List<NavigationNode> findPath(String startId, String endId) {
-    Map<String, NavigationNode> nodeMap = {for (var n in graph.nodes) n.id: n};
-    
-    if (!nodeMap.containsKey(startId) || !nodeMap.containsKey(endId)) return [];
+    if (startId == endId) {
+      final node = graph.nodeById(startId);
+      return node != null ? [node] : [];
+    }
 
-    Map<String, double> gScore = {for (var n in graph.nodes) n.id: double.infinity};
-    Map<String, double> fScore = {for (var n in graph.nodes) n.id: double.infinity};
-    Map<String, String?> cameFrom = {for (var n in graph.nodes) n.id: null};
+    final startNode = graph.nodeById(startId);
+    final endNode = graph.nodeById(endId);
+    if (startNode == null || endNode == null) return [];
 
-    gScore[startId] = 0;
-    fScore[startId] = _heuristic(nodeMap[startId]!, nodeMap[endId]!);
+    // --- A* with heap-based priority queue ---
+    final openSet = SplayTreeSet<_PQEntry>((a, b) {
+      final c = a.priority.compareTo(b.priority);
+      return c != 0 ? c : a.nodeId.compareTo(b.nodeId); // Tie-break by id
+    });
 
-    List<String> openSet = [startId];
+    final gScore = <String, double>{startId: 0.0};
+    final cameFrom = <String, String>{};
+
+    openSet.add(_PQEntry(startId, _heuristic(startNode, endNode)));
 
     while (openSet.isNotEmpty) {
-      // Get node with lowest fScore
-      String current = openSet.reduce((a, b) => fScore[a]! < fScore[b]! ? a : b);
-
-      if (current == endId) {
-        return _reconstructPath(cameFrom, current, nodeMap);
-      }
-
+      final current = openSet.first;
       openSet.remove(current);
 
-      for (var edge in graph.edges.where((e) => e.fromId == current || e.toId == current)) {
-        String neighbor = edge.fromId == current ? edge.toId : edge.fromId;
-        double tentativeGScore = gScore[current]! + edge.distance;
+      if (current.nodeId == endId) {
+        return _reconstructPath(cameFrom, endId);
+      }
 
-        if (tentativeGScore < gScore[neighbor]!) {
-          cameFrom[neighbor] = current;
-          gScore[neighbor] = tentativeGScore;
-          fScore[neighbor] = gScore[neighbor]! + _heuristic(nodeMap[neighbor]!, nodeMap[endId]!);
-          if (!openSet.contains(neighbor)) {
-            openSet.add(neighbor);
-          }
+      final edges = graph.edgesFrom(current.nodeId);
+      for (final edge in edges) {
+        final neighborId =
+            edge.fromId == current.nodeId ? edge.toId : edge.fromId;
+        final neighbor = graph.nodeById(neighborId);
+        if (neighbor == null) continue;
+
+        // Add floor-change penalty (4m penalty per floor change via stair/lift)
+        final moveCost = edge.distance + (edge.isStairOrLift ? 2.0 : 0.0);
+        final tentativeG =
+            (gScore[current.nodeId] ?? double.infinity) + moveCost;
+
+        if (tentativeG < (gScore[neighborId] ?? double.infinity)) {
+          cameFrom[neighborId] = current.nodeId;
+          gScore[neighborId] = tentativeG;
+          final fScore = tentativeG + _heuristic(neighbor, endNode);
+          openSet.add(_PQEntry(neighborId, fScore));
         }
       }
     }
 
-    return [];
+    return []; // No path found
   }
+
+  /// Find the nearest node to a given node ID (useful for localization snapping)
+  NavigationNode? nearestNodeOnFloor(String referenceId, int floor) {
+    final ref = graph.nodeById(referenceId);
+    if (ref == null) return null;
+
+    NavigationNode? nearest;
+    double bestDist = double.infinity;
+
+    for (final node in graph.nodes) {
+      if (node.id == referenceId || node.floor != floor) continue;
+      final d = _euclidean3D(
+          ref.position.x, ref.position.z, node.position.x, node.position.z);
+      if (d < bestDist) {
+        bestDist = d;
+        nearest = node;
+      }
+    }
+    return nearest;
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   double _heuristic(NavigationNode a, NavigationNode b) {
-    // 3D Euclidean distance
-    return sqrt(
-      pow(a.position.x - b.position.x, 2) +
-      pow(a.position.y - b.position.y, 2) +
-      pow((a.floor - b.floor) * 3, 2), // Assume floor height is 3m
-    );
+    // 3D Euclidean with floor transition cost
+    final floorPenalty = (a.floor - b.floor).abs() * 4.0;
+    return _euclidean3D(
+            a.position.x, a.position.z, b.position.x, b.position.z) +
+        floorPenalty;
   }
 
-  List<NavigationNode> _reconstructPath(Map<String, String?> cameFrom, String current, Map<String, NavigationNode> nodeMap) {
-    List<NavigationNode> totalPath = [nodeMap[current]!];
-    while (cameFrom[current] != null) {
-      current = cameFrom[current]!;
-      totalPath.add(nodeMap[current]!);
+  double _euclidean3D(double ax, double az, double bx, double bz) {
+    return sqrt(pow(ax - bx, 2) + pow(az - bz, 2));
+  }
+
+  List<NavigationNode> _reconstructPath(
+      Map<String, String> cameFrom, String current) {
+    final path = <NavigationNode>[];
+    String? cursor = current;
+    while (cursor != null) {
+      final node = graph.nodeById(cursor);
+      if (node != null) path.add(node);
+      cursor = cameFrom[cursor];
     }
-    return totalPath.reversed.toList();
+    return path.reversed.toList();
   }
 }

@@ -1,12 +1,12 @@
 import 'package:campus_prototype/campus_data.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:vector_math/vector_math_64.dart' show Vector3;
-import 'navigation/navigation_model.dart';
-import 'navigation/ar_navigation_view.dart';
-import 'navigation/computing_block_graph.dart';
+import 'package:campus_prototype/navigation/navigation_model.dart';
+import 'package:campus_prototype/navigation/ar_navigation_view.dart';
+import 'package:campus_prototype/data/computing_block_graph.dart';
 
 void main() {
   runApp(const MyApp());
@@ -89,20 +89,20 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(
-                  color: Colors.white.withOpacity(0.15),
+                  color: Colors.white.withValues(alpha: 0.15),
                   width: 1.5,
                 ),
                 gradient: LinearGradient(
                   colors: [
-                    Colors.white.withOpacity(0.1),
-                    Colors.white.withOpacity(0.04)
+                    Colors.white.withValues(alpha: 0.1),
+                    Colors.white.withValues(alpha: 0.04)
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.deepPurpleAccent.withOpacity(0.2),
+                    color: Colors.deepPurpleAccent.withValues(alpha: 0.2),
                     blurRadius: 15,
                     spreadRadius: 2,
                     offset: const Offset(0, 5),
@@ -115,7 +115,7 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                 leading: Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.deepPurpleAccent.withOpacity(0.2),
+                    color: Colors.deepPurpleAccent.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.apartment_rounded,
@@ -176,15 +176,15 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                   hintText: "Search room...",
                   hintStyle: const TextStyle(color: Colors.white38),
                   filled: true,
-                  fillColor: Colors.white.withOpacity(0.08),
+                  fillColor: Colors.white.withValues(alpha: 0.08),
                   prefixIcon: const Icon(Icons.search_rounded, color: Colors.white60),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(15),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(15),
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(15),
@@ -210,20 +210,20 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.12),
+                        color: Colors.white.withValues(alpha: 0.12),
                         width: 1.2,
                       ),
                       gradient: LinearGradient(
                         colors: [
-                          Colors.white.withOpacity(0.08),
-                          Colors.white.withOpacity(0.03)
+                          Colors.white.withValues(alpha: 0.08),
+                          Colors.white.withValues(alpha: 0.03)
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.blueAccent.withOpacity(0.15),
+                          color: Colors.blueAccent.withValues(alpha: 0.15),
                           blurRadius: 10,
                           spreadRadius: 1,
                           offset: const Offset(0, 4),
@@ -235,7 +235,7 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                       leading: Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: Colors.blueAccent.withOpacity(0.15),
+                          color: Colors.blueAccent.withValues(alpha: 0.15),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.meeting_room_rounded,
@@ -250,7 +250,7 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                       ),
                       subtitle: Text(
                         room['floor'] == 0 ? "Ground Floor" : "Floor ${room['floor']}",
-                        style: TextStyle(color: Colors.white.withOpacity(0.6)),
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
                       ),
                       trailing:
                           const Icon(Icons.info_outline_rounded, color: Colors.white60, size: 22),
@@ -331,21 +331,15 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
                     ),
                     onPressed: () {
                       Navigator.pop(context);
-                      // Import NavigationNode and ARNavigationView
-                      // Use a placeholder node if graph not fully mapped
-                      Navigator.push(
+                      launchARNavigation(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => ARNavigationView(
-                            targetNode: NavigationNode(
-                              id: room['name'],
-                              name: room['name'],
-                              floor: room['floor'],
-                              position: Vector3(10, 0, 10), // Default position
-                              type: NavNodeType.room,
-                            ),
-                            graph: computingBlockGraph,
-                          ),
+                        NavigationNode(
+                          displayLabel: room['name'].toString().split(' ').first,
+                          id: room['name'],
+                          name: room['name'],
+                          floor: room['floor'],
+                          position: Vector3(10, 0, 10), // Default position
+                          type: NavNodeType.room,
                         ),
                       );
                     },
@@ -369,5 +363,28 @@ class _CampusUIScreenState extends State<CampusUIScreen> {
         );
       },
     );
+  }
+
+  Future<void> launchARNavigation(
+      BuildContext context, NavigationNode target) async {
+    final status = await Permission.camera.request();
+    if (status.isGranted) {
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ARNavigationView(
+            targetNode: target,
+            graph: computingBlockGraph,
+          ),
+        ),
+      );
+    } else {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Camera permission required for AR navigation')),
+      );
+    }
   }
 }

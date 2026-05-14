@@ -1,257 +1,383 @@
-import 'dart:async';
-import 'dart:math' as math;
 import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_compass/flutter_compass.dart';
-import 'package:vector_math/vector_math_64.dart' as vector;
-import 'navigation_model.dart';
-import 'pathfinding.dart';
-import 'vision_engine.dart';
+import 'package:provider/provider.dart';
+import 'package:campus_prototype/navigation/navigation_model.dart';
+import 'package:campus_prototype/navigation/ar_controller.dart';
+import 'package:campus_prototype/navigation/ar_overlay_painter.dart';
+import 'package:campus_prototype/services/sensor_service.dart';
+
+// ─── ARNavigationView ─────────────────────────────────────────────────────────
+// Pure UI layer — reads state from ARController via Provider.
+// Does NOT manage sensors, OCR, or pathfinding directly.
+// Uses an AnimationController for smooth 60fps overlay animation,
+// completely decoupled from compass/sensor rebuilds.
 
 class ARNavigationView extends StatefulWidget {
   final NavigationNode targetNode;
   final CampusGraph graph;
 
-  const ARNavigationView({super.key, required this.targetNode, required this.graph});
+  const ARNavigationView({
+    super.key,
+    required this.targetNode,
+    required this.graph,
+  });
 
   @override
   State<ARNavigationView> createState() => _ARNavigationViewState();
 }
 
-class _ARNavigationViewState extends State<ARNavigationView> {
-  CameraController? _cameraController;
-  StreamSubscription? _compassSubscription;
-  double _heading = 0;
-  
-  NavigationNode? currentNode;
-  List<NavigationNode> currentPath = [];
-  late PathFinder pathFinder;
-  late VisionEngine visionEngine;
-
-  bool isLocalizing = true;
-  String statusMessage = "Point camera at a room number to localize...";
+class _ARNavigationViewState extends State<ARNavigationView>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animController;
+  late ARController _arController;
 
   @override
   void initState() {
     super.initState();
-    pathFinder = PathFinder(widget.graph);
-    visionEngine = VisionEngine(widget.graph);
-    _initializeCamera();
-    _startCompass();
-    _startLocalization();
-  }
+    // 60fps animation loop for holographic effects
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
 
-  Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) return;
-
-    _cameraController = CameraController(cameras[0], ResolutionPreset.high);
-    await _cameraController!.initialize();
-    if (mounted) setState(() {});
-  }
-
-  void _startCompass() {
-    _compassSubscription = FlutterCompass.events?.listen((event) {
-      if (mounted) {
-        setState(() {
-          _heading = event.heading ?? 0;
-        });
-      }
-    });
-  }
-
-  void _startLocalization() {
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) {
-        setState(() {
-          currentNode = widget.graph.nodes.firstWhere((n) => n.type == NavNodeType.entrance);
-          isLocalizing = false;
-          statusMessage = "Located! Following path to ${widget.targetNode.name}";
-          _calculatePath();
-        });
-      }
-    });
-  }
-
-  void _calculatePath() {
-    if (currentNode == null) return;
-    
-    NavigationNode? targetInGraph;
-    try {
-      targetInGraph = widget.graph.nodes.firstWhere(
-        (n) => n.name.toLowerCase().contains(widget.targetNode.name.toLowerCase()) || 
-               widget.targetNode.name.toLowerCase().contains(n.name.toLowerCase())
-      );
-    } catch (e) {
-      targetInGraph = widget.graph.nodes.last;
-    }
-
-    currentPath = pathFinder.findPath(currentNode!.id, targetInGraph.id);
-    if (mounted) setState(() {});
+    // ARController owns all business logic
+    _arController = ARController(
+      graph: widget.graph,
+      targetNode: widget.targetNode,
+      sensorService: SensorService(),
+    );
+    _arController.initialize();
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
-    _compassSubscription?.cancel();
-    visionEngine.dispose();
+    _animController.dispose();
+    _arController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      return const Scaffold(backgroundColor: Colors.black, body: Center(child: CircularProgressIndicator()));
-    }
+    return ChangeNotifierProvider<ARController>.value(
+      value: _arController,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Consumer<ARController>(
+          builder: (context, controller, _) {
+            if (!controller.isCameraReady) {
+              return const _LoadingScreen();
+            }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: AspectRatio(
-              aspectRatio: _cameraController!.value.aspectRatio,
-              child: CameraPreview(_cameraController!),
-            ),
-          ),
-          
-          if (!isLocalizing && currentPath.isNotEmpty)
-            _buildNavigationOverlay(),
+            return Stack(
+              children: [
+                // ── Camera Feed ────────────────────────────────────────────
+                Positioned.fill(
+                  child: CameraPreview(controller.cameraController!),
+                ),
 
-          _buildHUD(),
-          
-          Positioned(
-            top: 50,
-            left: 20,
-            child: CircleAvatar(
-              backgroundColor: Colors.black54,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
-          ),
-        ],
+                // ── AR Overlay (only when navigating) ─────────────────────
+                if (!controller.state.isLocalizing && controller.state.hasPath)
+                  _buildAROverlay(controller.state),
+
+                // ── Localization Scan UI ───────────────────────────────────
+                if (controller.state.isLocalizing)
+                  const _LocalizationScanOverlay(),
+
+                // ── Top Compass/Direction Panel ────────────────────────────
+                if (!controller.state.isLocalizing && controller.state.hasPath)
+                  _buildDirectionPanel(controller.state),
+
+                // ── Bottom HUD ────────────────────────────────────────────
+                _buildBottomHUD(controller.state),
+
+                // ── Close Button ──────────────────────────────────────────
+                _buildCloseButton(context),
+
+                // ── Confidence Indicator ─────────────────────────────────
+                _buildConfidenceDot(controller.state.confidence),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  Widget _buildNavigationOverlay() {
-    if (currentPath.length < 2) return const SizedBox();
-    
-    final nextNode = currentPath[1];
-    final currentPos = currentNode!.position;
-    final nextPos = nextNode.position;
-    
-    double bearing = math.atan2(nextPos.x - currentPos.x, nextPos.z - currentPos.z) * 180 / math.pi;
-    double diff = (bearing - _heading + 360) % 360;
-    if (diff > 180) diff -= 360;
+  // ─── AR Overlay ────────────────────────────────────────────────────────────
 
-    return Stack(
-      children: [
-        // Perspective Road on Floor
-        Positioned(
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: MediaQuery.of(context).size.height * 0.45,
+  Widget _buildAROverlay(NavigationState state) {
+    return AnimatedBuilder(
+      animation: _animController,
+      builder: (context, _) {
+        return Positioned.fill(
           child: CustomPaint(
-            painter: PerspectiveRoadPainter(diff),
+            painter: AROverlayPainter(
+              turnAngle: state.turnAngle,
+              distanceMeters: state.distanceToNextMeters,
+              nextNode: state.nextNode,
+              confidence: state.confidence,
+              animationValue: _animController.value,
+            ),
           ),
-        ),
-        
-        // 3D-style Fixed Top Arrow
-        Align(
-          alignment: const Alignment(0, -0.8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TweenAnimationBuilder(
-                tween: Tween<double>(begin: 0, end: diff * math.pi / 180),
-                duration: const Duration(milliseconds: 300),
-                builder: (context, double angle, child) {
-                  return Transform(
-                    transform: Matrix4.identity()
-                      ..setEntry(3, 2, 0.001)
-                      ..rotateZ(angle),
-                    alignment: Alignment.center,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: Colors.cyanAccent.withOpacity(0.4), blurRadius: 40, spreadRadius: 5),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.navigation_rounded,
-                        size: 100,
-                        color: Colors.white,
-                      ),
+        );
+      },
+    );
+  }
+
+  // ─── Direction Panel ───────────────────────────────────────────────────────
+
+  Widget _buildDirectionPanel(NavigationState state) {
+    final next = state.nextNode;
+    if (next == null) return const SizedBox();
+
+    final isFloorChange =
+        next.type == NavNodeType.staircase || next.type == NavNodeType.lift;
+    final goingUp = next.floor > (state.currentNode?.floor ?? 1);
+
+    return Positioned(
+      top: 60,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 3D rotating arrow
+            DirectionArrowWidget(
+              turnAngle: state.turnAngle,
+              isFloorChange: isFloorChange,
+              goingUp: goingUp,
+            ),
+            const SizedBox(height: 12),
+            // Destination label chip
+            ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(
+                      color: const Color(0xFF00E5FF).withValues(alpha: 0.55),
                     ),
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(25),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.black45,
-                      borderRadius: BorderRadius.circular(25),
-                      border: Border.all(color: Colors.cyanAccent.withOpacity(0.5)),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          nextNode.name.toUpperCase(),
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.1),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _turnLabel(state.turnAngle, isFloorChange, goingUp),
+                        style: const TextStyle(
+                          color: Color(0xFF00E5FF),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.4,
                         ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        next.displayLabel.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      if (state.distanceToNextMeters > 0) ...[
+                        const SizedBox(height: 2),
                         Text(
-                          "${(nextPos - currentPos).length.toStringAsFixed(1)} METERS AWAY",
-                          style: const TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.w600),
+                          '${state.distanceToNextMeters.toStringAsFixed(1)} m',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.65),
+                            fontSize: 12,
+                          ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _turnLabel(double angle, bool floorChange, bool goingUp) {
+    if (floorChange)
+      return goingUp ? 'TAKE STAIRS / LIFT UP' : 'TAKE STAIRS / LIFT DOWN';
+    if (angle.abs() < 15) return 'CONTINUE STRAIGHT';
+    if (angle < -60) return 'SHARP LEFT';
+    if (angle < 0) return 'TURN LEFT';
+    if (angle > 60) return 'SHARP RIGHT';
+    return 'TURN RIGHT';
+  }
+
+  // ─── Bottom HUD ────────────────────────────────────────────────────────────
+
+  Widget _buildBottomHUD(NavigationState state) {
+    return Positioned(
+      bottom: 32,
+      left: 20,
+      right: 20,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.60),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  state.statusMessage,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (state.isLocalizing) ...[
+                  const SizedBox(height: 12),
+                  LinearProgressIndicator(
+                    backgroundColor: Colors.white12,
+                    valueColor: AlwaysStoppedAnimation(
+                      state.confidence == LocalizationConfidence.medium
+                          ? const Color(0xFF00E5FF)
+                          : Colors.white38,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Scanning for room signs...',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                if (!state.isLocalizing && state.path.length > 1) ...[
+                  const SizedBox(height: 8),
+                  _buildMiniPathRow(state.path),
+                ],
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMiniPathRow(List<NavigationNode> path) {
+    final shown = path.take(4).toList();
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (int i = 0; i < shown.length; i++) ...[
+          Text(
+            shown[i].displayLabel,
+            style: TextStyle(
+              color: i == 0
+                  ? const Color(0xFF00E5FF)
+                  : Colors.white.withValues(alpha: 0.5),
+              fontSize: 11,
+              fontWeight: i == 0 ? FontWeight.w700 : FontWeight.normal,
+            ),
+          ),
+          if (i < shown.length - 1)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(Icons.chevron_right, color: Colors.white24, size: 14),
+            ),
+        ],
+        if (path.length > 4)
+          Text(
+            ' +${path.length - 4}',
+            style: const TextStyle(color: Colors.white30, fontSize: 11),
+          ),
       ],
     );
   }
 
-  Widget _buildHUD() {
+  // ─── Misc UI ──────────────────────────────────────────────────────────────
+
+  Widget _buildCloseButton(BuildContext context) {
     return Positioned(
-      bottom: 40,
-      left: 20,
+      top: 52,
+      left: 18,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => Navigator.of(context).pop(),
+          borderRadius: BorderRadius.circular(24),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black.withValues(alpha: 0.55),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: const Icon(Icons.close, color: Colors.white, size: 22),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfidenceDot(LocalizationConfidence confidence) {
+    final color = switch (confidence) {
+      LocalizationConfidence.high => const Color(0xFF69FF47),
+      LocalizationConfidence.medium => const Color(0xFFFFD600),
+      LocalizationConfidence.low => const Color(0xFFFF6D00),
+      LocalizationConfidence.none => Colors.white30,
+    };
+    return Positioned(
+      top: 60,
       right: 20,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        width: 10,
+        height: 10,
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white24),
+          shape: BoxShape.circle,
+          color: color,
+          boxShadow: [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8)],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Loading Screen ───────────────────────────────────────────────────────────
+
+class _LoadingScreen extends StatelessWidget {
+  const _LoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            CircularProgressIndicator(color: Color(0xFF00E5FF)),
+            SizedBox(height: 16),
             Text(
-              statusMessage,
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
+              'Initializing AR Camera...',
+              style: TextStyle(color: Colors.white70, fontSize: 14),
             ),
-            if (isLocalizing)
-              const Padding(
-                padding: EdgeInsets.only(top: 15),
-                child: LinearProgressIndicator(color: Colors.blueAccent),
-              ),
           ],
         ),
       ),
@@ -259,59 +385,117 @@ class _ARNavigationViewState extends State<ARNavigationView> {
   }
 }
 
-class PerspectiveRoadPainter extends CustomPainter {
-  final double diff;
-  PerspectiveRoadPainter(this.diff);
+// ─── Localization Scan Overlay ────────────────────────────────────────────────
+
+class _LocalizationScanOverlay extends StatelessWidget {
+  const _LocalizationScanOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          // Corner scan brackets
+          Positioned(
+            top: 120,
+            left: 40,
+            child: _ScanBracket(corner: Alignment.topLeft),
+          ),
+          Positioned(
+            top: 120,
+            right: 40,
+            child: _ScanBracket(corner: Alignment.topRight),
+          ),
+          Positioned(
+            bottom: 180,
+            left: 40,
+            child: _ScanBracket(corner: Alignment.bottomLeft),
+          ),
+          Positioned(
+            bottom: 180,
+            right: 40,
+            child: _ScanBracket(corner: Alignment.bottomRight),
+          ),
+          // Scan label
+          Positioned(
+            top: 110,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Text(
+                'POINT AT ROOM NUMBER',
+                style: TextStyle(
+                  color: const Color(0xFF00E5FF).withValues(alpha: 0.85),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.0,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanBracket extends StatelessWidget {
+  final Alignment corner;
+  const _ScanBracket({required this.corner});
+
+  @override
+  Widget build(BuildContext context) {
+    final isLeft =
+        corner == Alignment.topLeft || corner == Alignment.bottomLeft;
+    final isTop = corner == Alignment.topLeft || corner == Alignment.topRight;
+    const size = 24.0;
+    const thickness = 3.0;
+    const color = Color(0xFF00E5FF);
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _BracketPainter(
+          isLeft: isLeft,
+          isTop: isTop,
+          color: color,
+          thickness: thickness,
+        ),
+      ),
+    );
+  }
+}
+
+class _BracketPainter extends CustomPainter {
+  final bool isLeft, isTop;
+  final Color color;
+  final double thickness;
+
+  const _BracketPainter({
+    required this.isLeft,
+    required this.isTop,
+    required this.color,
+    required this.thickness,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          Colors.cyanAccent.withOpacity(0.5),
-          Colors.cyanAccent.withOpacity(0.0),
-        ],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..style = PaintingStyle.fill;
-
-    final path = Path();
-    double centerX = size.width / 2;
-    double bottomWidth = size.width * 0.9;
-    double topWidth = size.width * 0.15;
-    
-    double targetX = centerX + (diff * 3);
-    targetX = targetX.clamp(size.width * 0.1, size.width * 0.9);
-
-    path.moveTo(centerX - bottomWidth / 2, size.height);
-    path.lineTo(centerX + bottomWidth / 2, size.height);
-    path.lineTo(targetX + topWidth / 2, 0);
-    path.lineTo(targetX - topWidth / 2, 0);
-    path.close();
-
-    canvas.drawPath(path, paint);
-    
-    final edgePaint = Paint()
-      ..color = Colors.cyanAccent.withOpacity(0.8)
+      ..color = color
+      ..strokeWidth = thickness
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-    canvas.drawPath(path, edgePaint);
+      ..strokeCap = StrokeCap.square;
 
-    final linePaint = Paint()
-      ..color = Colors.white.withOpacity(0.4)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-      
-    for (int i = 1; i < 4; i++) {
-      double y = size.height * (1 - (i * 0.25));
-      double currentCenterX = centerX + (targetX - centerX) * (i * 0.25);
-      canvas.drawLine(Offset(currentCenterX - 10, y + 5), Offset(currentCenterX, y), linePaint);
-      canvas.drawLine(Offset(currentCenterX + 10, y + 5), Offset(currentCenterX, y), linePaint);
-    }
+    final x = isLeft ? 0.0 : size.width;
+    final y = isTop ? 0.0 : size.height;
+    final dx = isLeft ? size.width : -size.width;
+    final dy = isTop ? size.height : -size.height;
+
+    canvas.drawLine(Offset(x, y), Offset(x + dx, y), paint);
+    canvas.drawLine(Offset(x, y), Offset(x, y + dy), paint);
   }
 
   @override
-  bool shouldRepaint(CustomPainter oldDelegate) => true;
+  bool shouldRepaint(_BracketPainter old) => false;
 }

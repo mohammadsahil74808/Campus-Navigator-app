@@ -20,6 +20,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         password: _passwordController.text.trim(),
       );
 
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -27,6 +28,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Login Failed")),
       );

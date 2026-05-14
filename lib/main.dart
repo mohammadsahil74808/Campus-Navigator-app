@@ -4,13 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'campus_ui.dart';
-import 'splash_screen.dart';
+import 'package:campus_prototype/campus_ui.dart';
+import 'package:campus_prototype/splash_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'event_screen.dart';
-import 'campus_data.dart';
+import 'package:campus_prototype/event_screen.dart';
+import 'package:campus_prototype/campus_data.dart';
 
 
 void main() async {
@@ -203,16 +203,20 @@ class _CampusMapScreenState extends State<CampusMapScreen> {
 
   // ---------- Initialize Markers ----------
   void _initMarkers() {
-    for (var block in _blocks) {
-      _markers.add(Marker(
-        markerId: MarkerId(block['name']),
-        position: LatLng(block['lat'], block['lng']),
-        infoWindow: InfoWindow(title: block['name']),
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-  block['markerColor'] ?? BitmapDescriptor.hueAzure,),
-        onTap: () => _showBlockInfo(block),
-      ));
-    }
+    setState(() {
+      _markers.clear();
+      for (var block in _blocks) {
+        _markers.add(Marker(
+          markerId: MarkerId(block['name']),
+          position: LatLng(block['lat'], block['lng']),
+          infoWindow: InfoWindow(title: block['name']),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            (block['markerColor'] as num?)?.toDouble() ?? BitmapDescriptor.hueAzure,
+          ),
+          onTap: () => _showBlockInfo(block),
+        ));
+      }
+    });
   }
 
   // ---------- Show Block Info ----------
@@ -269,6 +273,7 @@ void _showBlockInfo(Map<String, dynamic> block) {
     final Uri googleMapUrl = Uri.parse(
         "https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=walking");
     if (!await launchUrl(googleMapUrl, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Could not open Google Maps")),
       );
@@ -296,8 +301,9 @@ void _showBlockInfo(Map<String, dynamic> block) {
       }
       if (permission == LocationPermission.deniedForever) return;
 
-      final pos =
-          await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      final pos = await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.high));
       setState(() {
         _currentLocation = LatLng(pos.latitude, pos.longitude);
         _markers.add(Marker(
@@ -318,7 +324,7 @@ void _showBlockInfo(Map<String, dynamic> block) {
           GoogleMap(
             initialCameraPosition:
                 const CameraPosition(target: _campusCenter, zoom: 17.0),
-            markers: _markers,
+            markers: Set<Marker>.of(_markers),
             myLocationEnabled: true,
             onMapCreated: (controller) {
               if (!_controller.isCompleted) _controller.complete(controller);
@@ -339,7 +345,7 @@ void _showBlockInfo(Map<String, dynamic> block) {
         borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: Colors.deepPurple.withOpacity(0.4),
+            color: Colors.deepPurple.withValues(alpha: 0.4),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -429,7 +435,7 @@ class _HomeScreenState extends State<HomeScreen>
                       left: -50 + (30 * _controller.value),
                       child: _MeshBlob(
                         size: 400,
-                        color: Colors.deepPurpleAccent.withOpacity(0.3),
+                        color: Colors.deepPurpleAccent.withValues(alpha: 0.3),
                       ),
                     ),
 
@@ -439,7 +445,7 @@ class _HomeScreenState extends State<HomeScreen>
                       right: -60 + (50 * _controller.value),
                       child: _MeshBlob(
                         size: 350,
-                        color: Colors.blueAccent.withOpacity(0.2),
+                        color: Colors.blueAccent.withValues(alpha: 0.2),
                       ),
                     ),
 
@@ -449,7 +455,7 @@ class _HomeScreenState extends State<HomeScreen>
                       right: 100 - (20 * _controller.value),
                       child: _MeshBlob(
                         size: 300,
-                        color: Colors.indigoAccent.withOpacity(0.15),
+                        color: Colors.indigoAccent.withValues(alpha: 0.15),
                       ),
                     ),
 
@@ -480,7 +486,7 @@ class _HomeScreenState extends State<HomeScreen>
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.purpleAccent.withOpacity(0.2),
+                          color: Colors.purpleAccent.withValues(alpha: 0.2),
                           blurRadius: 40,
                           spreadRadius: 10,
                         ),
@@ -504,7 +510,7 @@ class _HomeScreenState extends State<HomeScreen>
                       shadows: [
                         Shadow(
                           blurRadius: 25,
-                          color: Colors.deepPurpleAccent.withOpacity(0.8),
+                          color: Colors.deepPurpleAccent.withValues(alpha: 0.8),
                         )
                       ],
                     ),
@@ -591,18 +597,18 @@ _menuButton(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               border:
-                  Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+                  Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.5),
               gradient: LinearGradient(
                 colors: [
-                  Colors.white.withOpacity(0.15),
-                  Colors.white.withOpacity(0.05)
+                  Colors.white.withValues(alpha: 0.15),
+                  Colors.white.withValues(alpha: 0.05)
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 15,
                   offset: const Offset(0, 8),
                 )
@@ -662,7 +668,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.5)
+      ..color = Colors.white.withValues(alpha: 0.5)
       ..strokeWidth = 0.5;
 
     const double step = 30.0;
@@ -675,7 +681,7 @@ class _GridPainter extends CustomPainter {
     }
 
     // Add dots at intersections
-    final dotPaint = Paint()..color = Colors.white.withOpacity(0.8);
+    final dotPaint = Paint()..color = Colors.white.withValues(alpha: 0.8);
     for (double i = 0; i < size.width; i += step) {
       for (double j = 0; j < size.height; j += step) {
         canvas.drawCircle(Offset(i, j), 1.0, dotPaint);
@@ -704,12 +710,12 @@ class _BlockInfoSheetState extends State<_BlockInfoSheet> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
         decoration: BoxDecoration(
-          color: const Color(0xFF0F2027).withOpacity(0.7),
+          color: const Color(0xFF0F2027).withValues(alpha: 0.7),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-          border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.5),
           boxShadow: [
             BoxShadow(
-              color: Colors.deepPurpleAccent.withOpacity(0.3),
+              color: Colors.deepPurpleAccent.withValues(alpha: 0.3),
               blurRadius: 20,
               offset: const Offset(0, -5),
             ),
@@ -727,7 +733,7 @@ class _BlockInfoSheetState extends State<_BlockInfoSheet> {
               widget.block['name'],
               style: GoogleFonts.outfit(
                 fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
-                shadows: [Shadow(color: Colors.deepPurpleAccent.withOpacity(0.8), blurRadius: 10)],
+                shadows: [Shadow(color: Colors.deepPurpleAccent.withValues(alpha: 0.8), blurRadius: 10)],
               ),
               textAlign: TextAlign.center,
             ).animate().fade(duration: 400.ms),
@@ -789,12 +795,12 @@ class _RoomInfoSheetState extends State<_RoomInfoSheet> {
       child: Container(
         padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
-          color: const Color(0xFF0F2027).withOpacity(0.7),
+          color: const Color(0xFF0F2027).withValues(alpha: 0.7),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-          border: Border.all(color: Colors.blueAccent.withOpacity(0.3), width: 1.5),
+          border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3), width: 1.5),
           boxShadow: [
             BoxShadow(
-              color: Colors.blueAccent.withOpacity(0.1),
+              color: Colors.blueAccent.withValues(alpha: 0.1),
               blurRadius: 20,
               offset: const Offset(0, -5),
             ),
@@ -820,7 +826,7 @@ class _RoomInfoSheetState extends State<_RoomInfoSheet> {
                     "${widget.room['name']}",
                     style: GoogleFonts.outfit(
                       fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
-                      shadows: [Shadow(color: Colors.blueAccent.withOpacity(0.5), blurRadius: 10)],
+                      shadows: [Shadow(color: Colors.blueAccent.withValues(alpha: 0.5), blurRadius: 10)],
                     ),
                   ),
                 ),
@@ -838,7 +844,7 @@ class _RoomInfoSheetState extends State<_RoomInfoSheet> {
             Container(
               padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
+                color: Colors.white.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(15),
               ),
               child: Row(
@@ -863,7 +869,7 @@ class _RoomInfoSheetState extends State<_RoomInfoSheet> {
                 const SizedBox(height: 8),
                 Text(
                   widget.room['directions'],
-                  style: GoogleFonts.outfit(color: Colors.white.withOpacity(0.85), fontSize: 15, height: 1.5),
+                  style: GoogleFonts.outfit(color: Colors.white.withValues(alpha: 0.85), fontSize: 15, height: 1.5),
                 ),
               ],
             ).animate().fade(delay: 400.ms),

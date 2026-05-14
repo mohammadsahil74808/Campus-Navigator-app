@@ -69,6 +69,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       'createdAt': Timestamp.now(),
     });
 
+    if (!mounted) return;
     Navigator.pop(context);
   }
 

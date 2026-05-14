@@ -4,9 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui' as ui;
 import 'package:google_fonts/google_fonts.dart';
-import 'admin_login_screen.dart';
-import 'add_event_screen.dart';
-import 'event_detail_screen.dart';
+import 'package:campus_prototype/admin_login_screen.dart';
+import 'package:campus_prototype/add_event_screen.dart';
+import 'package:campus_prototype/event_detail_screen.dart';
 
 class EventScreen extends StatelessWidget {
   const EventScreen({super.key});
@@ -24,7 +24,7 @@ class EventScreen extends StatelessWidget {
         flexibleSpace: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [Colors.deepPurple.withOpacity(0.8), Colors.blue.withOpacity(0.4)],
+              colors: [Colors.deepPurple.withValues(alpha: 0.8), Colors.blue.withValues(alpha: 0.4)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -36,6 +36,7 @@ class EventScreen extends StatelessWidget {
               icon: const Icon(Icons.logout),
               onPressed: () async {
                 await FirebaseAuth.instance.signOut();
+                if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text("Logged out")),
                 );
@@ -109,9 +110,9 @@ class EventScreen extends StatelessWidget {
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           height: 150,
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
+            color: Colors.white.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withOpacity(0.1)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
           ),
         ).animate(onPlay: (c) => c.repeat()).shimmer(duration: 1200.ms, color: Colors.white10);
       },
@@ -137,11 +138,11 @@ class _EventCard extends StatelessWidget {
           filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.07),
+              color: Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.2),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1.2),
               gradient: LinearGradient(
-                colors: [Colors.white.withOpacity(0.1), Colors.white.withOpacity(0.02)],
+                colors: [Colors.white.withValues(alpha: 0.1), Colors.white.withValues(alpha: 0.02)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -176,7 +177,7 @@ class _EventCard extends StatelessWidget {
                               event['title'],
                               style: GoogleFonts.outfit(
                                 fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white,
-                                shadows: [Shadow(color: Colors.blueAccent.withOpacity(0.5), blurRadius: 10)],
+                                shadows: [Shadow(color: Colors.blueAccent.withValues(alpha: 0.5), blurRadius: 10)],
                               ),
                             ),
                           ),
@@ -225,7 +226,11 @@ class _EventCard extends StatelessWidget {
           TextButton(
             child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
             onPressed: () async {
-              await FirebaseFirestore.instance.collection('events').doc(event.id).delete();
+              await FirebaseFirestore.instance
+                  .collection('events')
+                  .doc(event.id)
+                  .delete();
+              if (!context.mounted) return;
               Navigator.pop(context);
             },
           ),
@@ -260,8 +265,8 @@ class _MeshBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        _Blob(color: Colors.deepPurple.withOpacity(0.15), size: 300, top: -100, left: -100, duration: 15),
-        _Blob(color: Colors.blue.withOpacity(0.1), size: 400, bottom: -150, right: -100, duration: 20),
+        _Blob(color: Colors.deepPurple.withValues(alpha: 0.15), size: 300, top: -100, left: -100, duration: 15),
+        _Blob(color: Colors.blue.withValues(alpha: 0.1), size: 400, bottom: -150, right: -100, duration: 20),
       ],
     );
   }
