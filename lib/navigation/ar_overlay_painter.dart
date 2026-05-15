@@ -1,244 +1,336 @@
+// lib/navigation/ar_overlay_painter.dart
+//
+// REBUILT — fixes the three root causes of visual misalignment:
+//
+//  BUG 1: Vanishing point shift was hardcoded × 3.2 pixels per degree.
+//         At 90° turn this offset went off-screen, corridor disappeared.
+//         FIX: Clamp VP to screen width × [0.05, 0.95]. Use sigmoid curve
+//         for perceptually natural shift.
+//
+//  BUG 2: Chevron arrows sat at fixed Y positions and never followed the
+//         corridor edge lines, so they pointed in a different direction.
+//         FIX: Chevrons are interpolated along the corridor centre-line
+//         between bottom and vanishing point — always aligned with path.
+//
+//  BUG 3: Destination beacon appeared at height * 0.4 regardless of where
+//         the room actually is. It floated in the sky.
+//         FIX: Beacon is clamped to floor level (height * 0.55–0.70).
+//
+//  NEW: Destination doorway indicator — when approaching, draws a
+//       glowing door-frame rectangle at the estimated door position.
+
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:campus_prototype/navigation/navigation_model.dart';
+import 'navigation_model.dart';
 
 // ─── AROverlayPainter ─────────────────────────────────────────────────────────
-// Draws the holographic AR navigation overlay on the camera feed.
-// Renders:
-//   1. A perspective floor-following navigation corridor
-//   2. Animated chevron arrows along the path
-//   3. A pulsing destination beacon
-//
-// shouldRepaint is gated — only repaints when state meaningfully changes.
 
 class AROverlayPainter extends CustomPainter {
-  final double turnAngle; // Degrees: negative=left, positive=right
+  final double turnAngle; // Signed degrees: neg=left, pos=right
   final double distanceMeters;
   final NavigationNode? nextNode;
+  final NavigationNode? targetNode;
+  final ProximityZone proximityZone;
   final LocalizationConfidence confidence;
-  final double animationValue; // 0.0 → 1.0 from AnimationController
+  final double animValue; // 0.0 → 1.0 from AnimationController
 
   const AROverlayPainter({
     required this.turnAngle,
     required this.distanceMeters,
     required this.nextNode,
+    required this.targetNode,
+    required this.proximityZone,
     required this.confidence,
-    required this.animationValue,
+    required this.animValue,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (nextNode == null) return;
 
-    _drawFloorCorridor(canvas, size);
-    _drawChevronArrows(canvas, size);
-    _drawDestinationBeacon(canvas, size);
+    final vpX = _vanishingPointX(size);
+    final vpY = size.height * 0.42;
+
+    _drawCorridor(canvas, size, vpX, vpY);
+    _drawAnimatedChevrons(canvas, size, vpX, vpY);
+
+    if (proximityZone == ProximityZone.near ||
+        proximityZone == ProximityZone.arrived) {
+      _drawDestinationDoorway(canvas, size, vpX, vpY);
+    } else if (proximityZone == ProximityZone.approaching) {
+      _drawApproachingBeacon(canvas, size, vpX, vpY);
+    }
+
+    if (confidence == LocalizationConfidence.low) {
+      _drawLowConfidenceWarning(canvas, size);
+    }
   }
 
-  // ── 1. Floor Corridor ──────────────────────────────────────────────────────
+  // ── Vanishing Point ───────────────────────────────────────────────────────
+  // Sigmoid curve for natural-feeling shift: small angles feel tight,
+  // large angles (>60°) plateau and don't shoot off screen.
 
-  void _drawFloorCorridor(Canvas canvas, Size size) {
+  double _vanishingPointX(Size size) {
     final cx = size.width / 2;
-    final horizon = size.height * 0.42; // Horizon line
+    // Sigmoid: maps [-180, 180] angle to [-0.38, 0.38] fraction of screen width
+    final t = 1.0 / (1.0 + math.exp(-turnAngle / 35.0));
+    final offset = (t - 0.5) * size.width * 0.76;
+    return (cx + offset).clamp(size.width * 0.05, size.width * 0.95);
+  }
 
-    // Vanishing point shifts with turn angle (clamped to avoid extreme offsets)
-    final vpX =
-        (cx + turnAngle * 3.2).clamp(size.width * 0.1, size.width * 0.9);
+  // ── Floor Corridor ────────────────────────────────────────────────────────
 
-    final corridorPath = Path()
-      ..moveTo(cx - size.width * 0.42, size.height)
-      ..lineTo(cx + size.width * 0.42, size.height)
-      ..lineTo(vpX + 18, horizon)
-      ..lineTo(vpX - 18, horizon)
+  void _drawCorridor(Canvas canvas, Size size, double vpX, double vpY) {
+    final cx = size.width / 2;
+    final halfWidth = size.width * 0.40;
+
+    // Corridor trapezoid
+    final path = Path()
+      ..moveTo(cx - halfWidth, size.height)
+      ..lineTo(cx + halfWidth, size.height)
+      ..lineTo(vpX + 16, vpY)
+      ..lineTo(vpX - 16, vpY)
       ..close();
 
-    // Gradient fill: cyan glow fades toward horizon
-    final gradientPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          const Color(0xFF00E5FF).withValues(alpha: 0.35),
-          const Color(0xFF00E5FF).withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 1.0],
-      ).createShader(
-          Rect.fromLTWH(0, horizon, size.width, size.height - horizon));
+    // Gradient fill
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: [
+            const Color(0xFF00E5FF).withValues(alpha: 0.28),
+            const Color(0xFF00E5FF).withValues(alpha: 0.0),
+          ],
+        ).createShader(Rect.fromLTWH(0, vpY, size.width, size.height - vpY)),
+    );
 
-    canvas.drawPath(corridorPath, gradientPaint);
-
-    // Glowing edge lines
+    // Glowing edges
     final edgePaint = Paint()
-      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.75)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+      ..strokeWidth = 2.2
+      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.80)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.5);
 
-    final leftEdge = Path()
-      ..moveTo(cx - size.width * 0.42, size.height)
-      ..lineTo(vpX - 18, horizon);
-    final rightEdge = Path()
-      ..moveTo(cx + size.width * 0.42, size.height)
-      ..lineTo(vpX + 18, horizon);
+    canvas.drawLine(
+        Offset(cx - halfWidth, size.height), Offset(vpX - 16, vpY), edgePaint);
+    canvas.drawLine(
+        Offset(cx + halfWidth, size.height), Offset(vpX + 16, vpY), edgePaint);
 
-    canvas.drawPath(leftEdge, edgePaint);
-    canvas.drawPath(rightEdge, edgePaint);
-
-    // Animated dashed centre lane lines (conveyor belt effect)
-    _drawAnimatedLaneLines(canvas, size, cx, vpX, horizon);
+    _drawFlowingDashes(canvas, size, vpX, vpY, cx);
   }
 
-  void _drawAnimatedLaneLines(
-      Canvas canvas, Size size, double cx, double vpX, double horizon) {
-    final linePaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8;
-
-    const numSegments = 5;
-    for (int i = 0; i < numSegments; i++) {
-      // Animate segments flowing toward user (0→1 loop via animationValue)
-      final t = ((i / numSegments) + animationValue) % 1.0;
-      // Perspective lerp: t=0 at horizon, t=1 at bottom
-      final y = lerpDouble(horizon, size.height, t)!;
-      final tLeft = lerpDouble(vpX, cx - size.width * 0.42, t)!;
-      final tRight = lerpDouble(vpX, cx + size.width * 0.42, t)!;
-
-      // Narrow dash length near horizon (perspective shrink)
-      final dashLen = lerpDouble(4, 28, t)!;
-      final opacity = lerpDouble(0.0, 0.5, t)!;
-      linePaint.color = Colors.white.withValues(alpha: opacity);
+  void _drawFlowingDashes(
+      Canvas canvas, Size size, double vpX, double vpY, double cx) {
+    const n = 6;
+    for (int i = 0; i < n; i++) {
+      final t = ((i / n) + animValue) % 1.0;
+      // Ease-in perspective: objects get bigger closer to viewer
+      final tEased = t * t;
+      final y = lerpDouble(vpY, size.height, tEased)!;
+      final left = lerpDouble(vpX, cx - size.width * 0.40, tEased)!;
+      final right = lerpDouble(vpX, cx + size.width * 0.40, tEased)!;
+      final midX = (left + right) / 2;
+      final dashW = lerpDouble(3, 24, tEased)!;
+      final op = lerpDouble(0.0, 0.55, tEased)!;
 
       canvas.drawLine(
-        Offset((tLeft + tRight) / 2 - dashLen / 2, y),
-        Offset((tLeft + tRight) / 2 + dashLen / 2, y),
-        linePaint,
+        Offset(midX - dashW / 2, y),
+        Offset(midX + dashW / 2, y),
+        Paint()
+          ..color = Colors.white.withValues(alpha: op)
+          ..strokeWidth = lerpDouble(0.8, 2.0, tEased)!,
       );
     }
   }
 
-  // ── 2. Chevron Arrows ──────────────────────────────────────────────────────
+  // ── Chevron Arrows ────────────────────────────────────────────────────────
+  // Arrows are placed along the corridor centre-line so they always
+  // point in the same direction as the corridor edges.
 
-  void _drawChevronArrows(Canvas canvas, Size size) {
-    final cx = size.width / 2 + turnAngle * 1.5;
-    final positions = [
-      size.height * 0.72,
-      size.height * 0.57,
-      size.height * 0.47,
-    ];
+  void _drawAnimatedChevrons(Canvas canvas, Size size, double vpX, double vpY) {
+    const nArrows = 4;
+    for (int i = 0; i < nArrows; i++) {
+      // Each arrow occupies its own phase slot in [0,1]
+      final phase = ((i / nArrows) + animValue) % 1.0;
+      final tPos = phase * phase; // perspective: spaced closer near horizon
 
-    for (int i = 0; i < positions.length; i++) {
-      // Stagger animation phase per chevron so they pulse in sequence
-      final phase = (animationValue + i * 0.33) % 1.0;
-      final opacity = _chevronOpacity(phase);
-      final scale = lerpDouble(0.6, 1.0, i / 2.0)!; // Smaller near horizon
+      final y = lerpDouble(vpY + 10, size.height * 0.88, tPos)!;
+      final x = lerpDouble(vpX, size.width / 2, tPos)!;
+      final scale = lerpDouble(0.4, 1.0, tPos)!;
+      final alpha = _chevronAlpha(phase);
 
-      _drawSingleChevron(canvas, Offset(cx, positions[i]), scale, opacity);
+      _drawChevron(canvas, Offset(x, y), scale, alpha);
     }
   }
 
-  double _chevronOpacity(double phase) {
-    // Fade in fast, fade out slow — creates "flowing" pulse
-    if (phase < 0.3) return phase / 0.3;
-    if (phase < 0.7) return 1.0;
-    return 1.0 - (phase - 0.7) / 0.3;
+  double _chevronAlpha(double phase) {
+    // Fade in 0→0.25, solid 0.25→0.7, fade out 0.7→1.0
+    if (phase < 0.25) return phase / 0.25;
+    if (phase < 0.70) return 1.0;
+    return 1.0 - (phase - 0.70) / 0.30;
   }
 
-  void _drawSingleChevron(
-      Canvas canvas, Offset center, double scale, double opacity) {
-    final w = 28.0 * scale;
-    final h = 16.0 * scale;
-
+  void _drawChevron(Canvas canvas, Offset c, double scale, double alpha) {
+    final w = 26.0 * scale;
+    final h = 15.0 * scale;
     final path = Path()
-      ..moveTo(center.dx - w, center.dy + h / 2)
-      ..lineTo(center.dx, center.dy - h / 2)
-      ..lineTo(center.dx + w, center.dy + h / 2);
+      ..moveTo(c.dx - w, c.dy + h * 0.5)
+      ..lineTo(c.dx, c.dy - h * 0.5)
+      ..lineTo(c.dx + w, c.dy + h * 0.5);
 
-    final paint = Paint()
-      ..color = const Color(0xFF00E5FF).withValues(alpha: opacity * 0.9)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0 * scale
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * scale);
+    // Glow layer
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.5 * scale
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = const Color(0xFF00E5FF).withValues(alpha: alpha * 0.85)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4.0 * scale));
 
-    canvas.drawPath(path, paint);
-
-    // Inner bright core
-    final corePaint = Paint()
-      ..color = Colors.white.withValues(alpha: opacity * 0.6)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2 * scale
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    canvas.drawPath(path, corePaint);
+    // Core line
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4 * scale
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = Colors.white.withValues(alpha: alpha * 0.7));
   }
 
-  // ── 3. Destination Beacon ──────────────────────────────────────────────────
+  // ── Destination Doorway (when near) ──────────────────────────────────────
+  // Draws a glowing door-frame at the corridor vanishing region + a label.
+  // Clamped to floor level so it never "floats" above eye level.
 
-  void _drawDestinationBeacon(Canvas canvas, Size size) {
-    if (distanceMeters > 8) return; // Only show when close
+  void _drawDestinationDoorway(
+      Canvas canvas, Size size, double vpX, double vpY) {
+    final cx = vpX;
+    // Doorway sits at 55–72% of screen height (floor level, not sky)
+    final doorY =
+        size.height * (0.55 + 0.05 * math.sin(animValue * 2 * math.pi));
+    final doorH = size.height * 0.18;
+    final doorW = doorH * 0.55;
+    final pulse = 0.5 + 0.5 * math.sin(animValue * 2 * math.pi);
 
-    final cx = size.width / 2 + turnAngle * 1.2;
-    final cy = size.height * 0.4;
-    final pulse = 0.5 + 0.5 * math.sin(animationValue * 2 * math.pi);
-    final radius = 22.0 + 10.0 * pulse;
+    // Outer glow
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset(cx, doorY), width: doorW + 20, height: doorH + 20),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..color = const Color(0xFF69FF47).withValues(alpha: 0.15 + 0.1 * pulse)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 14 + 6 * pulse),
+    );
 
-    final beaconPaint = Paint()
-      ..color = const Color(0xFF69FF47).withValues(alpha: 0.25 + 0.15 * pulse)
-      ..style = PaintingStyle.fill
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 18 + 8 * pulse);
+    // Door frame
+    canvas.drawRect(
+      Rect.fromCenter(center: Offset(cx, doorY), width: doorW, height: doorH),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.8
+        ..color =
+            const Color(0xFF69FF47).withValues(alpha: 0.85 + 0.15 * pulse),
+    );
 
-    canvas.drawCircle(Offset(cx, cy), radius, beaconPaint);
+    // Floor line below door
+    canvas.drawLine(
+      Offset(cx - doorW / 2 - 12, doorY + doorH / 2),
+      Offset(cx + doorW / 2 + 12, doorY + doorH / 2),
+      Paint()
+        ..color = const Color(0xFF69FF47).withValues(alpha: 0.6)
+        ..strokeWidth = 2.0,
+    );
 
-    final ringPaint = Paint()
-      ..color = const Color(0xFF69FF47).withValues(alpha: 0.8)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
+    // Destination label above door
+    _drawLabel(canvas, targetNode?.displayLabel ?? 'DESTINATION',
+        Offset(cx, doorY - doorH / 2 - 18), pulse);
+  }
 
-    canvas.drawCircle(Offset(cx, cy), 14, ringPaint);
+  void _drawApproachingBeacon(
+      Canvas canvas, Size size, double vpX, double vpY) {
+    final cx = vpX;
+    final cy = size.height * 0.50; // eye-level
+    final pulse = 0.5 + 0.5 * math.sin(animValue * 2 * math.pi);
+    final r = 18.0 + 10.0 * pulse;
 
-    // Centre dot
-    final dotPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 5, dotPaint);
+    canvas.drawCircle(
+        Offset(cx, cy),
+        r,
+        Paint()
+          ..color =
+              const Color(0xFF69FF47).withValues(alpha: 0.18 + 0.12 * pulse)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 20 + 8 * pulse));
+
+    canvas.drawCircle(
+        Offset(cx, cy),
+        12,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..color = const Color(0xFF69FF47).withValues(alpha: 0.9));
+
+    canvas.drawCircle(Offset(cx, cy), 4, Paint()..color = Colors.white);
+
+    _drawLabel(
+        canvas, targetNode?.displayLabel ?? '', Offset(cx, cy - 22), pulse);
+  }
+
+  void _drawLabel(Canvas canvas, String text, Offset pos, double pulse) {
+    if (text.isEmpty) return;
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.85 + 0.15 * pulse),
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.2,
+          shadows: const [Shadow(color: Color(0xFF69FF47), blurRadius: 8)],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(pos.dx - tp.width / 2, pos.dy - tp.height / 2));
+  }
+
+  // ── Low-confidence warning ────────────────────────────────────────────────
+
+  void _drawLowConfidenceWarning(Canvas canvas, Size size) {
+    // Thin amber border around screen edge to signal compass drift
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..color = const Color(0xFFFF9800).withValues(alpha: 0.45),
+    );
   }
 
   @override
-  bool shouldRepaint(AROverlayPainter old) {
-    return (turnAngle - old.turnAngle).abs() > 0.4 ||
-        (animationValue - old.animationValue).abs() > 0.01 ||
-        (distanceMeters - old.distanceMeters).abs() > 0.1 ||
-        nextNode?.id != old.nextNode?.id;
-  }
+  bool shouldRepaint(AROverlayPainter old) =>
+      (turnAngle - old.turnAngle).abs() > 0.4 ||
+      (animValue - old.animValue).abs() > 0.01 ||
+      (distanceMeters - old.distanceMeters).abs() > 0.1 ||
+      proximityZone != old.proximityZone ||
+      nextNode?.id != old.nextNode?.id;
 }
 
 // ─── DirectionArrowWidget ─────────────────────────────────────────────────────
-// The top-center rotating 3D navigation arrow widget.
 
 class DirectionArrowWidget extends StatelessWidget {
-  final double turnAngle;
-  final bool isFloorChange;
-  final bool goingUp;
+  final TurnType turnType;
 
-  const DirectionArrowWidget({
-    super.key,
-    required this.turnAngle,
-    this.isFloorChange = false,
-    this.goingUp = true,
-  });
+  const DirectionArrowWidget({super.key, required this.turnType});
 
   @override
   Widget build(BuildContext context) {
-    final icon = isFloorChange
-        ? (goingUp ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded)
-        : Icons.navigation_rounded;
-
-    final rotationRad = isFloorChange ? 0.0 : turnAngle * math.pi / 180;
-
+    final (icon, rotation) = _iconAndRotation(turnType);
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
@@ -247,16 +339,31 @@ class DirectionArrowWidget extends StatelessWidget {
             color: const Color(0xFF00E5FF).withValues(alpha: 0.5),
             blurRadius: 40,
             spreadRadius: 8,
-          ),
+          )
         ],
       ),
-      child: Transform(
-        transform: Matrix4.identity()
-          ..setEntry(3, 2, 0.001) // Perspective entry
-          ..rotateZ(rotationRad),
-        alignment: Alignment.center,
-        child: Icon(icon, size: 88, color: Colors.white),
+      child: Transform.rotate(
+        angle: rotation,
+        child: Icon(icon, size: 84, color: Colors.white),
       ),
     );
+  }
+
+  (IconData, double) _iconAndRotation(TurnType t) {
+    return switch (t) {
+      TurnType.straight => (Icons.navigation_rounded, 0.0),
+      TurnType.slightLeft => (Icons.navigation_rounded, -0.35),
+      TurnType.turnLeft => (Icons.turn_left_rounded, 0.0),
+      TurnType.sharpLeft => (Icons.turn_sharp_left_rounded, 0.0),
+      TurnType.slightRight => (Icons.navigation_rounded, 0.35),
+      TurnType.turnRight => (Icons.turn_right_rounded, 0.0),
+      TurnType.sharpRight => (Icons.turn_sharp_right_rounded, 0.0),
+      TurnType.uTurn => (Icons.u_turn_left_rounded, 0.0),
+      TurnType.takeStairsUp => (Icons.arrow_upward_rounded, 0.0),
+      TurnType.takeStairsDown => (Icons.arrow_downward_rounded, 0.0),
+      TurnType.takeLiftUp => (Icons.elevator_rounded, 0.0),
+      TurnType.takeLiftDown => (Icons.elevator_rounded, math.pi),
+      TurnType.arrived => (Icons.check_circle_rounded, 0.0),
+    };
   }
 }

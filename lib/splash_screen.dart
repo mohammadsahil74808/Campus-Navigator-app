@@ -54,8 +54,8 @@ class _SplashScreenState extends State<SplashScreen>
 
             FadeTransition(
               opacity: fade,
-              child: Column(
-                children: const [
+              child: const Column(
+                children: [
                   Text(
                     "Lingayas",
                     style: TextStyle(

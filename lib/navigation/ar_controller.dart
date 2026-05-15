@@ -1,16 +1,26 @@
+// lib/navigation/ar_controller.dart
+//
+// Central navigation brain. Owns all state. UI reads via ChangeNotifier.
+//
+// Key fixes over the original:
+//  1. Bearing computed from corridor geometry, NOT raw node coordinates
+//     → arrows align with the actual hallway direction
+//  2. Path uses smoothed waypoints — user only sees decision-point turns
+//  3. Dead reckoning advances position between OCR fixes
+//  4. Reroute detection: if walked too far past expected junction → recalculate
+//  5. Proximity zones: far/approaching/near/arrived trigger beacon + UI changes
+//  6. OCR continues at low rate after localization to catch re-anchor moments
+//  7. Position snaps to corridor entry (door node) when room sign is scanned
+
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
-import 'package:campus_prototype/navigation/navigation_model.dart';
-import 'package:campus_prototype/navigation/pathfinding.dart';
-import 'package:campus_prototype/services/ocr_service.dart';
-import 'package:campus_prototype/services/sensor_service.dart';
-
-// ─── ARController ─────────────────────────────────────────────────────────────
-// The single source of truth for all AR navigation state.
-// Widgets listen via ChangeNotifier — only notified on meaningful state change,
-// never on every compass tick.
+import 'navigation_model.dart';
+import 'pathfinding.dart';
+import '../localization/localization_service.dart';
+import '../services/ocr_service.dart';
+import '../services/sensor_service.dart';
 
 class ARController extends ChangeNotifier {
   final CampusGraph graph;
@@ -19,25 +29,17 @@ class ARController extends ChangeNotifier {
 
   late final PathFinder _pathFinder;
   late final OcrService _ocrService;
+  late final LocalizationService _locService;
 
-  // ── Camera ──────────────────────────────────────────────────────────────
   CameraController? cameraController;
   bool get isCameraReady =>
       cameraController != null && cameraController!.value.isInitialized;
 
-  // ── Navigation State ────────────────────────────────────────────────────
-  NavigationState _state = const NavigationState();
+  NavigationState _state = NavigationState();
   NavigationState get state => _state;
 
-  // ── Localization ────────────────────────────────────────────────────────
-  bool _ocrActive = false;
-  Timer? _ocrThrottle;
   int _sensorOrientation = 0;
-
-  // Confidence accumulator: N consecutive OCR matches required to accept a position
-  String? _lastOcrNodeId;
-  int _ocrConfidenceCount = 0;
-  static const int _requiredConfidence = 3;
+  Timer? _rerouteTimer;
 
   ARController({
     required this.graph,
@@ -46,13 +48,24 @@ class ARController extends ChangeNotifier {
   }) {
     _pathFinder = PathFinder(graph);
     _ocrService = OcrService();
+    _locService = LocalizationService(graph: graph, pathFinder: _pathFinder);
   }
 
-  // ─── Initialization ────────────────────────────────────────────────────────
+  // ─── Initialize ───────────────────────────────────────────────────────────
 
   Future<void> initialize() async {
+    // Validate graph in debug builds to catch topology errors early
+    assert(() {
+      final issues = graph.validate();
+      for (final i in issues) {
+        debugPrint('[GraphValidation] $i');
+      }
+      return true;
+    }());
+
     sensorService.addListener(_onSensorUpdate);
     sensorService.start();
+    _locService.start();
     await _initCamera();
   }
 
@@ -60,118 +73,86 @@ class ARController extends ChangeNotifier {
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        _updateState(_state.copyWith(
-          statusMessage: 'No camera available on this device.',
-        ));
+        _emit(_state.copyWith(statusMessage: 'No camera found.'));
         return;
       }
-
-      final camera = cameras.first;
-      _sensorOrientation = camera.sensorOrientation;
+      final cam = cameras.first;
+      _sensorOrientation = cam.sensorOrientation;
 
       cameraController = CameraController(
-        camera,
-        ResolutionPreset.high, // Increased from medium for better text clarity
+        cam,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
       );
-
       await cameraController!.initialize();
-      notifyListeners(); // Camera is ready — trigger UI rebuild
-
+      notifyListeners();
       _startOcrStream();
     } catch (e) {
-      debugPrint('[ARController] Camera init error: $e');
-      _updateState(_state.copyWith(
-        statusMessage: 'Camera error: ${e.toString()}',
-      ));
+      _emit(_state.copyWith(statusMessage: 'Camera error: $e'));
     }
   }
 
-  // ─── OCR Stream ────────────────────────────────────────────────────────────
+  // ─── OCR Stream ───────────────────────────────────────────────────────────
 
   void _startOcrStream() {
-    cameraController?.startImageStream((image) {
-      if (_ocrActive || _state.confidence == LocalizationConfidence.high)
-        return;
-      // Throttle: process at most 1 frame every 500ms (faster for debugging)
-      _ocrThrottle ??= Timer(const Duration(milliseconds: 500), () {
-        _ocrThrottle = null;
-        _processFrame(image);
-      });
+    final rotation = OcrService.rotationFromSensor(_sensorOrientation);
+    _ocrService.isLocalizing = true;
+
+    cameraController?.startImageStream((image) async {
+      final frame = await _ocrService.processFrame(image, rotation);
+      if (frame == null || !frame.hasContent) return;
+      _handleOcrFrame(frame);
     });
   }
 
-  Future<void> _processFrame(CameraImage image) async {
-    if (_ocrActive) return;
-    _ocrActive = true;
-
-    try {
-      final rotation = OcrService.rotationFromSensor(_sensorOrientation);
-      final text =
-          await _ocrService.processFrame(image, _sensorOrientation, rotation);
-
-      if (text != null && text.isNotEmpty) {
-        final matchedNode = graph.matchFromOcrText(text);
-        if (matchedNode != null) {
-          _handleOcrMatch(matchedNode);
-        } else {
-          // DEBUG: Show what the app is seeing
-          _updateState(_state.copyWith(
-            statusMessage: 'Seeing: "$text" (No match)',
-            confidence: LocalizationConfidence.low,
-          ));
-        }
-      } else {
-        _updateState(_state.copyWith(
-          statusMessage: 'Scanning... (No text detected)',
-          confidence: LocalizationConfidence.none,
+  void _handleOcrFrame(OcrFrame frame) {
+    final match = graph.matchFromOcrText(frame.fullText);
+    if (match == null) {
+      if (_state.isLocalizing) {
+        _emit(_state.copyWith(
+          statusMessage: 'Scanning... saw: "${_truncate(frame.fullText, 30)}"',
+          confidence: LocalizationConfidence.low,
         ));
       }
-    } finally {
-      _ocrActive = false;
+      return;
+    }
+
+    // Snap detected node to corridor (user is reading sign from hallway)
+    final corridorNode = _locService.snapToCorridorEntry(match.node);
+
+    if (_state.isLocalizing) {
+      // Submit to vote buffer — only confirmed after N matches
+      final confirmed = _locService.submitOcrDetection(corridorNode);
+      if (confirmed == null) {
+        _emit(_state.copyWith(
+          statusMessage: 'Detected: ${match.node.displayLabel} (confirming…)',
+          confidence: LocalizationConfidence.medium,
+        ));
+        return;
+      }
+      // Confirmed localization
+      _ocrService.isLocalizing = false;
+      _calculateAndStartNavigation(confirmed);
+    } else {
+      // Re-anchor while navigating (if OCR sees a room we expect to be near)
+      _tryReanchor(corridorNode, match.node);
     }
   }
 
-  void _handleOcrMatch(NavigationNode detected) {
-    if (detected.id == _lastOcrNodeId) {
-      _ocrConfidenceCount++;
-    } else {
-      _lastOcrNodeId = detected.id;
-      _ocrConfidenceCount = 1;
-    }
+  // ─── Pathfinding & Navigation Start ───────────────────────────────────────
 
-    final confidence = _ocrConfidenceCount >= _requiredConfidence
-        ? LocalizationConfidence.high
-        : LocalizationConfidence.medium;
-
-    if (_ocrConfidenceCount >= _requiredConfidence) {
-      // Confirmed position — calculate route
-      debugPrint('[ARController] Localized to: ${detected.name}');
-      cameraController?.stopImageStream();
-      _calculatePath(detected);
-    } else {
-      _updateState(_state.copyWith(
-        statusMessage: 'Detected: ${detected.displayLabel} (confirming...)',
-        confidence: confidence,
-      ));
-    }
-  }
-
-  // ─── Pathfinding ───────────────────────────────────────────────────────────
-
-  void _calculatePath(NavigationNode from) {
+  void _calculateAndStartNavigation(NavigationNode fromNode) {
+    // Find target node in graph — match by id first, then by alias
     NavigationNode? target;
-    try {
-      target = graph.nodes.firstWhere(
-        (n) => n.id == targetNode.id || n.name == targetNode.name,
-      );
-    } catch (_) {
-      // Fuzzy fallback
+    target = graph.nodeById(targetNode.id);
+    if (target == null) {
+      // The target was created from campus_ui.dart with a raw name — fuzzy match
+      final lower = targetNode.name.toLowerCase();
       for (final n in graph.nodes) {
-        if (n.aliases.any((a) =>
-            targetNode.name.toLowerCase().contains(a.toLowerCase()) ||
-            a.toLowerCase().contains(targetNode.name.toLowerCase()))) {
+        if (n.id.contains(lower) ||
+            n.name.toLowerCase().contains(lower) ||
+            n.aliases.any((a) => lower.contains(a) || a.contains(lower))) {
           target = n;
           break;
         }
@@ -179,33 +160,83 @@ class ARController extends ChangeNotifier {
     }
 
     if (target == null) {
-      _updateState(_state.copyWith(
-        statusMessage: 'Destination not found in map.',
+      _emit(_state.copyWith(
+        statusMessage:
+            'Room "${targetNode.name}" not in map. Check room number.',
+        isLocalizing: false,
+        confidence: LocalizationConfidence.high,
+      ));
+      return;
+    }
+
+    final result = _pathFinder.findPath(fromNode.id, target.id);
+    if (!result.reachable) {
+      _emit(_state.copyWith(
+        statusMessage: 'No path found: ${result.errorReason}',
         isLocalizing: false,
       ));
       return;
     }
 
-    final path = _pathFinder.findPath(from.id, target.id);
-    if (path.isEmpty) {
-      _updateState(_state.copyWith(
-        statusMessage: 'No route to ${target.displayLabel}.',
-        isLocalizing: false,
-      ));
-      return;
-    }
+    // Use smoothed path for navigation (removes straight-run corridor nodes)
+    final navPath = result.smoothed;
+    _locService.setActivePath(result.nodes); // DR uses full path
 
-    _updateState(_state.copyWith(
-      currentNode: from,
+    _emit(_state.copyWith(
+      currentNode: fromNode,
       targetNode: target,
-      path: path,
+      path: navPath,
       isLocalizing: false,
       statusMessage: 'Navigating to ${target.displayLabel}',
       confidence: LocalizationConfidence.high,
+      totalRemainingMeters: result.totalDistanceMeters,
     ));
+
+    _scheduleRerouteCheck();
   }
 
-  // ─── Sensor Updates → Turn Angle Calculation ──────────────────────────────
+  // ─── Re-anchor During Navigation ─────────────────────────────────────────
+  // If OCR spots a node that's on our expected path ahead, jump to it.
+  // If it's completely off-path, trigger a reroute.
+
+  void _tryReanchor(NavigationNode corridorNode, NavigationNode rawDetected) {
+    final path = _state.path;
+    if (path.isEmpty) return;
+
+    // Is this node on the upcoming path (within next 4 steps)?
+    final upcoming = path.take(4).map((n) => n.id).toSet();
+    if (upcoming.contains(corridorNode.id)) {
+      // Jump ahead to this position
+      final idx = path.indexWhere((n) => n.id == corridorNode.id);
+      final newPath = path.sublist(idx);
+      final dist = newPath.fold<double>(
+          0,
+          (sum, n) =>
+              sum +
+              (newPath.indexOf(n) < newPath.length - 1
+                  ? n.floorDistanceTo(newPath[newPath.indexOf(n) + 1])
+                  : 0));
+
+      _locService.anchorToNode(corridorNode);
+      _emit(_state.copyWith(
+        currentNode: corridorNode,
+        path: newPath,
+        totalRemainingMeters: dist,
+        confidence: LocalizationConfidence.high,
+        statusMessage: 'On track → ${_state.targetNode?.displayLabel}',
+      ));
+      return;
+    }
+
+    // Off-path detection: OCR sees a room that's NOT on our route
+    // This means the user took a wrong turn — reroute from here
+    debugPrint(
+        '[ARController] Off-path detected at ${corridorNode.id}, rerouting');
+    _locService.anchorToNode(corridorNode);
+    _calculateAndStartNavigation(corridorNode);
+  }
+
+  // ─── Sensor Updates → Turn Angle ─────────────────────────────────────────
 
   void _onSensorUpdate() {
     if (!_state.hasPath) return;
@@ -216,52 +247,109 @@ class ARController extends ChangeNotifier {
 
     final heading = sensorService.heading;
 
-    // Bearing to next waypoint
-    final dx = next.position.x - current.position.x;
-    final dz = next.position.z - current.position.z;
-    final bearing = (math.atan2(dx, dz) * 180 / math.pi + 360) % 360;
+    // Use corridor-aligned bearing when available.
+    // If both nodes have corridorHeading set and agree → use that.
+    // Otherwise compute bearing from node positions.
+    double bearing;
+    if (next.corridorHeading != null) {
+      bearing = next.corridorHeading!;
+    } else {
+      final dx = next.position.x - current.position.x;
+      final dz = next.position.z - current.position.z;
+      bearing = (math.atan2(dx, dz) * 180 / math.pi + 360) % 360;
+    }
 
-    // Turn angle: positive = right, negative = left
+    // Turn angle: how much user must rotate to face next waypoint
     double turn = bearing - heading;
     if (turn > 180) turn -= 360;
     if (turn < -180) turn += 360;
 
-    // Distance to next node (2D)
-    final dist = math.sqrt(dx * dx + dz * dz);
+    final dist = current.floorDistanceTo(next);
 
-    // Auto-advance: if user is close to next node, pop path
-    final updatedPath = List<NavigationNode>.from(_state.path);
-    if (dist < 2.0 && updatedPath.length > 2) {
-      updatedPath.removeAt(0);
-      debugPrint(
-          '[ARController] Reached ${current.name}, advancing to ${updatedPath[1].name}');
+    // Proximity zone logic
+    final target = _state.targetNode;
+    final targetDist = target != null ? current.floorDistanceTo(target) : dist;
+    final zone = _proximityZone(targetDist, dist, next, target);
+
+    // Dead reckoning advancement (DR service updates currentNode internally)
+    final drNode = _locService.currentNode;
+    NavigationNode effectiveCurrent = current;
+    List<NavigationNode> updatedPath = _state.path;
+
+    if (drNode != null && drNode.id != current.id) {
+      final idx = _state.path.indexWhere((n) => n.id == drNode.id);
+      if (idx > 0 && idx < _state.path.length) {
+        updatedPath = _state.path.sublist(idx);
+        effectiveCurrent = drNode;
+        debugPrint('[ARController] DR advanced to ${drNode.displayLabel}');
+      }
     }
 
-    // Build updated state (no rebuild if values are same-ish)
     final newState = _state.copyWith(
+      currentNode: effectiveCurrent,
       path: updatedPath,
-      currentNode: updatedPath.first,
       headingDegrees: heading,
       turnAngle: turn,
+      turnType: turnTypeFromAngle(
+        turn,
+        isVertical:
+            next.type == NavNodeType.staircase || next.type == NavNodeType.lift,
+        goingUp: next.floor > (current.floor),
+        isLift: next.type == NavNodeType.lift,
+      ),
       distanceToNextMeters: dist,
+      proximityZone: zone,
+      showDestinationBeacon:
+          zone == ProximityZone.near || zone == ProximityZone.arrived,
+      statusMessage: zone == ProximityZone.arrived
+          ? 'You have arrived at ${target?.displayLabel ?? "destination"}'
+          : 'Head to ${next.displayLabel}',
+      confidence: _locService.confidence,
     );
 
-    // Only notify if values changed meaningfully (saves rebuilds)
+    // Only notify on meaningful change (< 0.5° turn or < 0.2m distance)
     if ((newState.turnAngle - _state.turnAngle).abs() > 0.5 ||
         (newState.distanceToNextMeters - _state.distanceToNextMeters).abs() >
             0.2 ||
-        newState.currentNode?.id != _state.currentNode?.id) {
+        newState.currentNode?.id != _state.currentNode?.id ||
+        newState.proximityZone != _state.proximityZone) {
       _state = newState;
       notifyListeners();
     }
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  ProximityZone _proximityZone(double targetDist, double nextDist,
+      NavigationNode next, NavigationNode? target) {
+    if (next.id == target?.id || target?.id == _state.currentNode?.id) {
+      if (targetDist < 1.5) return ProximityZone.arrived;
+      if (targetDist < 4.0) return ProximityZone.near;
+    }
+    if (targetDist < 8.0) return ProximityZone.approaching;
+    return ProximityZone.far;
+  }
 
-  void _updateState(NavigationState newState) {
-    _state = newState;
+  // ─── Reroute Check Timer ──────────────────────────────────────────────────
+  // Every 5s, check if dead reckoning thinks we've deviated.
+
+  void _scheduleRerouteCheck() {
+    _rerouteTimer?.cancel();
+    _rerouteTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_locService.isLikelyDeviating() && _locService.currentNode != null) {
+        debugPrint('[ARController] Reroute triggered by dead reckoning');
+        _calculateAndStartNavigation(_locService.currentNode!);
+      }
+    });
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  void _emit(NavigationState s) {
+    _state = s;
     notifyListeners();
   }
+
+  String _truncate(String s, int n) =>
+      s.length > n ? '${s.substring(0, n)}…' : s;
 
   // ─── Dispose ──────────────────────────────────────────────────────────────
 
@@ -269,7 +357,9 @@ class ARController extends ChangeNotifier {
   void dispose() {
     sensorService.removeListener(_onSensorUpdate);
     sensorService.stop();
-    _ocrThrottle?.cancel();
+    _locService.dispose();
+    _rerouteTimer?.cancel();
+    cameraController?.stopImageStream();
     cameraController?.dispose();
     _ocrService.dispose();
     super.dispose();

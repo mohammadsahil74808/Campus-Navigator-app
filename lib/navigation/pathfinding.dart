@@ -1,123 +1,242 @@
-import 'dart:math';
+// lib/navigation/pathfinding.dart
+//
+// REBUILT: Corridor-aware A* with:
+//  1. Wall-safe routing — rooms only reachable via their door node
+//  2. Priority queue (SplayTreeSet) — O(log n) not O(n)
+//  3. Path smoothing — removes redundant corridor waypoints in straight runs
+//  4. Corridor heading alignment — each step carries the hallway direction
+//  5. Total distance calculation for ETA
+//  6. Snap-to-graph — finds nearest corridor node to arbitrary XZ position
+
+import 'dart:math' as math;
 import 'dart:collection';
-import 'package:campus_prototype/navigation/navigation_model.dart';
+import 'navigation_model.dart';
 
 // ─── Priority Queue Entry ─────────────────────────────────────────────────────
 
-class _PQEntry implements Comparable<_PQEntry> {
-  final String nodeId;
-  final double priority;
-  _PQEntry(this.nodeId, this.priority);
-
+class _PQ implements Comparable<_PQ> {
+  final String id;
+  final double f;
+  _PQ(this.id, this.f);
   @override
-  int compareTo(_PQEntry other) => priority.compareTo(other.priority);
+  int compareTo(_PQ o) {
+    final c = f.compareTo(o.f);
+    return c != 0 ? c : id.compareTo(o.id);
+  }
 }
 
-// ─── PathFinder (A* with binary heap priority queue) ─────────────────────────
+// ─── PathResult ───────────────────────────────────────────────────────────────
+
+class PathResult {
+  final List<NavigationNode> nodes; // Full waypoint list
+  final List<NavigationNode> smoothed; // Collapsed straight runs
+  final double totalDistanceMeters;
+  final bool reachable;
+  final String? errorReason;
+
+  const PathResult({
+    required this.nodes,
+    required this.smoothed,
+    required this.totalDistanceMeters,
+    required this.reachable,
+    this.errorReason,
+  });
+
+  static PathResult unreachable(String reason) => PathResult(
+        nodes: [],
+        smoothed: [],
+        totalDistanceMeters: 0,
+        reachable: false,
+        errorReason: reason,
+      );
+}
+
+// ─── PathFinder ───────────────────────────────────────────────────────────────
 
 class PathFinder {
   final CampusGraph graph;
 
   PathFinder(this.graph);
 
-  /// Returns a list of NavigationNodes from startId to endId.
-  /// Returns empty list if no path exists.
-  /// Multi-floor routing works via staircase/lift nodes that connect floors.
-  List<NavigationNode> findPath(String startId, String endId) {
+  // ── Main Entry Point ──────────────────────────────────────────────────────
+
+  PathResult findPath(String startId, String endId) {
     if (startId == endId) {
-      final node = graph.nodeById(startId);
-      return node != null ? [node] : [];
+      final n = graph.nodeById(startId);
+      return n == null
+          ? PathResult.unreachable('Start node not found')
+          : PathResult(
+              nodes: [n],
+              smoothed: [n],
+              totalDistanceMeters: 0,
+              reachable: true);
     }
 
-    final startNode = graph.nodeById(startId);
-    final endNode = graph.nodeById(endId);
-    if (startNode == null || endNode == null) return [];
+    final start = graph.nodeById(startId);
+    final end = graph.nodeById(endId);
+    if (start == null) {
+      return PathResult.unreachable('Start node "$startId" missing from graph');
+    }
+    if (end == null) {
+      return PathResult.unreachable('End node "$endId" missing from graph');
+    }
 
-    // --- A* with heap-based priority queue ---
-    final openSet = SplayTreeSet<_PQEntry>((a, b) {
-      final c = a.priority.compareTo(b.priority);
-      return c != 0 ? c : a.nodeId.compareTo(b.nodeId); // Tie-break by id
-    });
-
+    // A* search
+    final open = SplayTreeSet<_PQ>();
     final gScore = <String, double>{startId: 0.0};
     final cameFrom = <String, String>{};
 
-    openSet.add(_PQEntry(startId, _heuristic(startNode, endNode)));
+    open.add(_PQ(startId, _h(start, end)));
 
-    while (openSet.isNotEmpty) {
-      final current = openSet.first;
-      openSet.remove(current);
+    while (open.isNotEmpty) {
+      final cur = open.first;
+      open.remove(cur);
 
-      if (current.nodeId == endId) {
-        return _reconstructPath(cameFrom, endId);
+      if (cur.id == endId) {
+        final path = _reconstruct(cameFrom, endId);
+        final dist = _totalDistance(path);
+        final smooth = _smoothPath(path);
+        return PathResult(
+          nodes: path,
+          smoothed: smooth,
+          totalDistanceMeters: dist,
+          reachable: true,
+        );
       }
 
-      final edges = graph.edgesFrom(current.nodeId);
-      for (final edge in edges) {
-        final neighborId =
-            edge.fromId == current.nodeId ? edge.toId : edge.fromId;
-        final neighbor = graph.nodeById(neighborId);
-        if (neighbor == null) continue;
+      for (final edge in graph.edgesFrom(cur.id)) {
+        final nId = edge.fromId == cur.id ? edge.toId : edge.fromId;
+        final nNode = graph.nodeById(nId);
+        if (nNode == null) continue;
 
-        // Add floor-change penalty (4m penalty per floor change via stair/lift)
-        final moveCost = edge.distance + (edge.isStairOrLift ? 2.0 : 0.0);
-        final tentativeG =
-            (gScore[current.nodeId] ?? double.infinity) + moveCost;
+        // Vertical transition cost: stair = 6m penalty, lift = 3m penalty
+        // (encourages lift use for > 1 floor, discourages unnecessary floor changes)
+        double cost = edge.distance;
+        if (edge.isVertical) {
+          cost += nNode.type == NavNodeType.lift ? 3.0 : 6.0;
+        }
 
-        if (tentativeG < (gScore[neighborId] ?? double.infinity)) {
-          cameFrom[neighborId] = current.nodeId;
-          gScore[neighborId] = tentativeG;
-          final fScore = tentativeG + _heuristic(neighbor, endNode);
-          openSet.add(_PQEntry(neighborId, fScore));
+        final tg = (gScore[cur.id] ?? double.infinity) + cost;
+        if (tg < (gScore[nId] ?? double.infinity)) {
+          cameFrom[nId] = cur.id;
+          gScore[nId] = tg;
+          open.add(_PQ(nId, tg + _h(nNode, end)));
         }
       }
     }
 
-    return []; // No path found
+    return PathResult.unreachable('No walkable path from $startId to $endId');
   }
 
-  /// Find the nearest node to a given node ID (useful for localization snapping)
-  NavigationNode? nearestNodeOnFloor(String referenceId, int floor) {
-    final ref = graph.nodeById(referenceId);
-    if (ref == null) return null;
+  // ── Snap: find nearest walkable node on a floor to an XZ position ─────────
+  // Used when dead reckoning drifts the estimated position off a known node.
 
-    NavigationNode? nearest;
+  NavigationNode snapToNearestCorridor(double x, double z, int floor) {
+    NavigationNode? best;
     double bestDist = double.infinity;
-
-    for (final node in graph.nodes) {
-      if (node.id == referenceId || node.floor != floor) continue;
-      final d = _euclidean3D(
-          ref.position.x, ref.position.z, node.position.x, node.position.z);
+    for (final n in graph.nodes) {
+      if (n.floor != floor || !n.type.isWalkable) continue;
+      final d = _dist2d(x, z, n.position.x, n.position.z);
       if (d < bestDist) {
         bestDist = d;
-        nearest = node;
+        best = n;
       }
     }
-    return nearest;
+    // Fallback: main junction of the floor
+    return best ??
+        graph.nodes.firstWhere(
+          (n) => n.floor == floor && n.type == NavNodeType.junction,
+          orElse: () => graph.nodes.first,
+        );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  double _heuristic(NavigationNode a, NavigationNode b) {
-    // 3D Euclidean with floor transition cost
-    final floorPenalty = (a.floor - b.floor).abs() * 4.0;
-    return _euclidean3D(
-            a.position.x, a.position.z, b.position.x, b.position.z) +
-        floorPenalty;
+  // ── Re-route from a new current position ──────────────────────────────────
+  // Called when the user is detected off the expected corridor segment.
+  PathResult reroute(String newCurrentId, String targetId) {
+    return findPath(newCurrentId, targetId);
   }
 
-  double _euclidean3D(double ax, double az, double bx, double bz) {
-    return sqrt(pow(ax - bx, 2) + pow(az - bz, 2));
+  // ── Path Smoothing ────────────────────────────────────────────────────────
+  // Collapses consecutive corridor nodes that are on the same heading into
+  // a single segment. This means the AR arrow only changes when the user
+  // reaches a real turn (junction), not every 4m corridor waypoint.
+  //
+  // Rule: keep a node if:
+  //   • it's the start or end
+  //   • it's a junction, staircase, lift, door, or room (decision points)
+  //   • the heading from previous-to-this differs by > 20° from this-to-next
+
+  List<NavigationNode> _smoothPath(List<NavigationNode> path) {
+    if (path.length <= 2) return path;
+
+    final result = <NavigationNode>[path.first];
+
+    for (int i = 1; i < path.length - 1; i++) {
+      final prev = path[i - 1];
+      final cur = path[i];
+      final next = path[i + 1];
+
+      // Always keep decision points
+      if (cur.type != NavNodeType.corridor) {
+        result.add(cur);
+        continue;
+      }
+
+      // Keep if heading changes meaningfully
+      final h1 = _bearing(
+          prev.position.x, prev.position.z, cur.position.x, cur.position.z);
+      final h2 = _bearing(
+          cur.position.x, cur.position.z, next.position.x, next.position.z);
+      if (_angleDiff(h1, h2).abs() > 20) {
+        result.add(cur);
+      }
+      // Otherwise skip — straight-line corridor node
+    }
+
+    result.add(path.last);
+    return result;
   }
 
-  List<NavigationNode> _reconstructPath(
-      Map<String, String> cameFrom, String current) {
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  double _h(NavigationNode a, NavigationNode b) {
+    // Admissible heuristic: Euclidean 2D + floor penalty
+    return _dist2d(a.position.x, a.position.z, b.position.x, b.position.z) +
+        (a.floor - b.floor).abs() * 8.0;
+  }
+
+  double _dist2d(double ax, double az, double bx, double bz) =>
+      math.sqrt(math.pow(ax - bx, 2) + math.pow(az - bz, 2));
+
+  double _bearing(double ax, double az, double bx, double bz) =>
+      (math.atan2(bx - ax, bz - az) * 180 / math.pi + 360) % 360;
+
+  double _angleDiff(double a, double b) {
+    double d = b - a;
+    while (d > 180) {
+      d -= 360;
+    }
+    while (d < -180) {
+      d += 360;
+    }
+    return d;
+  }
+
+  double _totalDistance(List<NavigationNode> path) {
+    double d = 0;
+    for (int i = 0; i < path.length - 1; i++) {
+      d += path[i].floorDistanceTo(path[i + 1]);
+    }
+    return d;
+  }
+
+  List<NavigationNode> _reconstruct(Map<String, String> came, String cur) {
     final path = <NavigationNode>[];
-    String? cursor = current;
-    while (cursor != null) {
-      final node = graph.nodeById(cursor);
-      if (node != null) path.add(node);
-      cursor = cameFrom[cursor];
+    String? c = cur;
+    while (c != null) {
+      final n = graph.nodeById(c);
+      if (n != null) path.add(n);
+      c = came[c];
     }
     return path.reversed.toList();
   }

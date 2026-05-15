@@ -45,7 +45,7 @@ class MainMenu extends StatelessWidget {
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => CampusUIScreen()),
+                  MaterialPageRoute(builder: (_) => const CampusUIScreen()),
                 );
               },
             ),
@@ -551,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen>
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CampusUIScreen(),
+                          builder: (_) => const CampusUIScreen(),
                         ),
                       );
                     },
